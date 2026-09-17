@@ -472,7 +472,11 @@
       "resultTags": "{count} etiqueta asignada",
       "resultTags_plural": "{count} etiquetas asignadas",
       "resultSkipped": "{count} omitidos",
+      "resultInvalidPhone": "{count} teléfono no válido",
+      "resultInvalidPhone_plural": "{count} teléfonos no válidos",
       "resultFailed": "{count} con error",
+      "failedRowsHeading": "Filas con error",
+      "unknownReason": "Error desconocido",
       "willBeCreated": "{name} (se creará al importar)",
       "columns": {
         "phone": "Teléfono",
@@ -494,6 +498,8 @@
       "toastTagsSkipped": "Etiquetas desconocidas omitidas (créalas primero en Configuración): {sample}{more}",
       "toastSkipped": "{count} duplicado omitido",
       "toastSkipped_plural": "{count} duplicados omitidos",
+      "toastInvalidPhone": "{count} contacto no tenía un número de teléfono utilizable",
+      "toastInvalidPhone_plural": "{count} contactos no tenían un número de teléfono utilizable",
       "toastFailed": "{count} contacto no se pudo importar",
       "toastFailed_plural": "{count} contactos no se pudieron importar",
       "toastError": "Error en la importación"
@@ -1005,7 +1011,11 @@
       },
       "branches": {
         "yes": "Sí",
-        "no": "No"
+        "no": "No",
+        "if": "SI",
+        "elseIf": "SI NO",
+        "else": "EN OTRO CASO",
+        "otherHint": "Se ejecuta cuando nada de arriba coincide"
       },
       "addStep": "Agregar paso",
       "moveUp": "Subir",
@@ -1031,6 +1041,7 @@
         "amountLabel": "Cantidad",
         "unitLabel": "Unidad",
         "units": {
+          "seconds": "Segundos",
           "minutes": "Minutos",
           "hours": "Horas",
           "days": "Días"
@@ -1056,6 +1067,35 @@
         "matchWord": "Palabra completa",
         "matchWordHint": "Coincide con la palabra clave solo como palabra independiente, así \"k\" ya no se activa con \"thanks\". Ideal para palabras clave cortas en idiomas con espacios; usa Contiene para idiomas que se escriben sin espacios.",
         "matchExact": "Exacta",
+        "mediaLabel": "Multimedia (opcional)",
+        "mediaImage": "Imagen",
+        "mediaVideo": "Vídeo",
+        "mediaFile": "Archivo subido",
+        "mediaChange": "Cambiar",
+        "mediaRemove": "Quitar",
+        "mediaUploaded": "Multimedia subida",
+        "mediaUploadFailed": "Error al subir",
+        "mediaTooLarge": "El archivo pesa {size} MB — el límite para este tipo es {limit} MB.",
+        "buttonsLabel": "Botones (opcional)",
+        "buttonsEmpty": "Aún no hay botones — agrega una respuesta rápida o un botón de URL.",
+        "buttonQuickReply": "Respuesta rápida",
+        "buttonUrl": "Botón de URL",
+        "buttonTitleLabel": "Etiqueta",
+        "buttonValueLabel": "Valor enviado",
+        "buttonValueHint": "Lo que lleva la respuesta del cliente. Por defecto, la etiqueta.",
+        "buttonUrlLabel": "URL del enlace",
+        "addButton": "Agregar botón",
+        "addQuickReply": "Respuesta rápida",
+        "addUrlButton": "Botón de URL",
+        "quickReplyLimit": "WhatsApp permite como máximo 3 respuestas rápidas por mensaje.",
+        "conditionAddElse": "Agregar condición si no",
+        "conditionRemove": "Quitar condición",
+        "conditionElseHint": "Cuando ninguna condición coincide, se ejecuta la columna EN OTRO CASO.",
+        "operatorLabel": "Coincidencia",
+        "operatorContains": "Contiene",
+        "operatorWord": "Palabra completa",
+        "operatorExact": "Texto exacto",
+        "placeholderValueMessage": "p. ej. Explicar más",
         "closeConversationHint": "Cambia el estado de la conversación a \"cerrada\". No requiere configuración."
       }
     }

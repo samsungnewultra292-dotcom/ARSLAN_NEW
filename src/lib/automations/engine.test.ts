@@ -6,11 +6,14 @@ const h = vi.hoisted(() => ({
   state: {
     owned: null as { id: string } | null,
     ownedCustomField: null as { id: string } | null,
+    conversation: null as { id: string } | null,
+    taggedTag: null as { id: string } | null,
     automations: [] as Record<string, unknown>[],
     steps: [] as Record<string, unknown>[],
     fromCalls: [] as string[],
     updateCalls: [] as { table: string; filters: [string, string, unknown][] }[],
     upsertCalls: [] as { table: string; payload: unknown }[],
+    tagInserts: [] as Record<string, unknown>[],
     logInserts: [] as Record<string, unknown>[],
     logUpdates: [] as Record<string, unknown>[],
   },
@@ -45,7 +48,17 @@ vi.mock("./admin-client", () => {
       }
       return { data: null, error: null };
     }
-    if (table === "automations") return { data: state.automations, error: null };
+    if (table === "automations") {
+      const rows = state.automations.filter((a) =>
+        ops.filters.every(([op, k, v]) => {
+          if (op !== "eq") return true;
+          const field = (a as Record<string, unknown>)[k];
+          if (v === true || v === false) return (field ?? !!field) === v;
+          return (field ?? null) === (v ?? null);
+        }),
+      );
+      return { data: rows, error: null };
+    }
     if (table === "automation_logs") {
       if (type === "insert") {
         state.logInserts.push(ops.payload as Record<string, unknown>);
@@ -57,7 +70,32 @@ vi.mock("./admin-client", () => {
       }
       return { data: { steps_executed: [], status: "success" }, error: null };
     }
-    if (table === "automation_steps") return { data: state.steps, error: null };
+    if (table === "contact_tags") {
+      if (type === "insert") {
+        state.tagInserts.push(ops.payload as Record<string, unknown>);
+        return { data: null, error: null };
+      }
+      return { data: [], error: null };
+    }
+    if (table === "conversations") return { data: state.conversation, error: null };
+    if (table === "tags") return { data: state.taggedTag, error: null };
+    if (table === "automation_steps") {
+      // Apply the position/branch/parent scoping the engine relies on so
+      // branch routing can be exercised without a real database.
+      const rows = state.steps.filter((s) =>
+        ops.filters.every(([op, k, v]) => {
+          const field = (s as Record<string, unknown>)[k];
+          if (op === "eq") return field === v;
+          if (op === "is") return (field ?? null) === (v ?? null);
+          if (op === "gte") return Number(field ?? 0) >= Number(v);
+          return true;
+        }),
+      );
+      const sorted = [...rows].sort(
+        (a, b) => Number((a as { position?: number }).position ?? 0) - Number((b as { position?: number }).position ?? 0),
+      );
+      return { data: sorted, error: null };
+    }
     return { data: null, error: null };
   }
 
@@ -75,8 +113,8 @@ vi.mock("./admin-client", () => {
       delete: () => ((ops.type = "delete"), b),
       upsert: (p: unknown) => ((ops.type = "upsert"), (ops.payload = p), b),
       eq: (k: string, v: unknown) => (ops.filters.push(["eq", k, v]), b),
-      gte: () => b,
-      is: () => b,
+      gte: (k: string, v: unknown) => (ops.filters.push(["gte", k, v]), b),
+      is: (k: string, v: unknown) => (ops.filters.push(["is", k, v]), b),
       order: () => b,
       limit: () => b,
       single: () => Promise.resolve(resolve(ops)),
@@ -102,10 +140,16 @@ vi.mock("./meta-send", () => ({
   engineSendText: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
   engineSendTemplate: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
   engineSendInteractive: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
+  engineSendMedia: vi.fn(async () => ({ whatsapp_message_id: "media1" })),
 }));
 
 import { runAutomationsForTrigger, triggerMatches } from "./engine";
 import type { Automation, KeywordMatchTriggerConfig } from "@/types";
+import {
+  engineSendText,
+  engineSendInteractive,
+  engineSendMedia,
+} from "./meta-send";
 
 const ACCOUNT = "acct-1";
 
@@ -119,6 +163,9 @@ beforeEach(() => {
   h.state.upsertCalls = [];
   h.state.logInserts = [];
   h.state.logUpdates = [];
+  h.state.tagInserts = [];
+  h.state.conversation = null;
+  h.state.taggedTag = null;
 });
 
 describe("runAutomationsForTrigger — tenant isolation", () => {
@@ -548,5 +595,224 @@ describe("triggerMatches — keyword_match", () => {
   it("ignores empty keywords and empty messages in `word` mode", () => {
     expect(on(automation({ keywords: [""], match_type: "word" }), "anything")).toBe(false);
     expect(on(automation({ keywords: ["hi"], match_type: "word" }), "")).toBe(false);
+  });
+});
+
+describe("send_message — media + quick replies", () => {
+  it("sends media then interactive quick replies when both are configured", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.conversation = { id: "conv-1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      {
+        id: "s1",
+        automation_id: "a1",
+        step_type: "send_message",
+        position: 0,
+        parent_step_id: null,
+        step_config: {
+          text: "Look!",
+          media: { kind: "image", url: "https://cdn.example/pic.png" },
+          buttons: [
+            { id: "yes", type: "quick_reply", title: "Yes", value: "y" },
+          ],
+        },
+      },
+    ];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: {},
+    });
+
+    expect(engineSendMedia).toHaveBeenCalledTimes(1);
+    expect(engineSendInteractive).toHaveBeenCalledTimes(1);
+    expect(engineSendText).not.toHaveBeenCalled();
+  });
+
+  it("appends URL button lines to text when quick replies are also present", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.conversation = { id: "conv-1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      {
+        id: "s1",
+        automation_id: "a1",
+        step_type: "send_message",
+        position: 0,
+        parent_step_id: null,
+        step_config: {
+          text: "Body",
+          buttons: [
+            { id: "yes", type: "quick_reply", title: "A", value: "a" },
+            { id: "d1", type: "url", title: "Docs", url: "https://docs.example.com" },
+          ],
+        },
+      },
+    ];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: {},
+    });
+
+    expect(engineSendInteractive).toHaveBeenCalledTimes(1);
+    expect(engineSendText).not.toHaveBeenCalled();
+    const payload = (engineSendInteractive as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0]?.payload;
+    expect(String(payload?.body ?? "")).toContain("Docs: https://docs.example.com");
+  });
+
+  it("throws when nothing useful is configured", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      {
+        id: "s1",
+        automation_id: "a1",
+        step_type: "send_message",
+        position: 0,
+        parent_step_id: null,
+        step_config: { text: "   " },
+      },
+    ];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: {},
+    });
+
+    const failed = h.state.logUpdates.filter((u) => u.status === "failed");
+    expect(failed.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("condition — multi-rule routing", () => {
+  function condStep(subject: string, rules: Record<string, unknown>[]) {
+    return {
+      id: "s1",
+      automation_id: "a1",
+      step_type: "condition",
+      position: 0,
+      parent_step_id: null,
+      step_config: { subject, rules },
+    };
+  }
+
+  const contentRules = [
+    { subject: "message_content", operator: "exact", value: "hi", branch_key: "yes" },
+    { subject: "message_content", operator: "exact", value: "hello", branch_key: "b1" },
+    { subject: "message_content", operator: "contains", value: "help", branch_key: "b2" },
+  ];
+
+  function leaf(type: string, config: Record<string, unknown>, position: number, parent: string, branch: string) {
+    return {
+      id: `${type}-${branch}-${position}`,
+      automation_id: "a1",
+      step_type: type,
+      position,
+      parent_step_id: parent,
+      branch,
+      step_config: config,
+    };
+  }
+
+  function runWithText(text: string) {
+    return runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { message_text: text },
+    });
+  }
+
+  beforeEach(() => {
+    h.state.taggedTag = { id: "tag-any" };
+  });
+
+  it("routes to yes bucket when first rule matches", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      condStep("message_content", contentRules),
+      leaf("add_tag", { tag_id: "matched-hi" }, 0, "s1", "yes"),
+      leaf("add_tag", { tag_id: "matched-hello" }, 1, "s1", "b1"),
+      leaf("add_tag", { tag_id: "matched-help" }, 2, "s1", "b2"),
+      leaf("add_tag", { tag_id: "else-tag" }, 3, "s1", "no"),
+    ];
+
+    await runWithText("hi");
+
+    expect(h.state.tagInserts).toHaveLength(1);
+    expect(h.state.tagInserts[0]).toMatchObject({ tag_id: "matched-hi" });
+  });
+
+  it("routes to b1 bucket when second rule matches", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      condStep("message_content", contentRules),
+      leaf("add_tag", { tag_id: "matched-hi" }, 0, "s1", "yes"),
+      leaf("add_tag", { tag_id: "matched-hello" }, 1, "s1", "b1"),
+      leaf("add_tag", { tag_id: "else-tag" }, 2, "s1", "no"),
+    ];
+
+    await runWithText("hello");
+
+    expect(h.state.tagInserts).toHaveLength(1);
+    expect(h.state.tagInserts[0]).toMatchObject({ tag_id: "matched-hello" });
+  });
+
+  it("routes to ELSE bucket when no rule matches", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      condStep("message_content", contentRules),
+      leaf("add_tag", { tag_id: "matched-hi" }, 0, "s1", "yes"),
+      leaf("add_tag", { tag_id: "else-tag" }, 1, "s1", "no"),
+    ];
+
+    await runWithText("something else");
+
+    expect(h.state.tagInserts).toHaveLength(1);
+    expect(h.state.tagInserts[0]).toMatchObject({ tag_id: "else-tag" });
+  });
+
+  it("supports mixed operators across rules (exact + contains)", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      condStep("message_content", contentRules),
+      leaf("add_tag", { tag_id: "exact-match" }, 0, "s1", "yes"),
+      leaf("add_tag", { tag_id: "contains-match" }, 1, "s1", "b2"),
+      leaf("add_tag", { tag_id: "else-tag" }, 2, "s1", "no"),
+    ];
+
+    await runWithText("please help me");
+
+    expect(h.state.tagInserts).toHaveLength(1);
+    expect(h.state.tagInserts[0]).toMatchObject({ tag_id: "contains-match" });
+  });
+
+  it("supports interactive_reply message_text in exact match (tap handling)", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      condStep("message_content", contentRules),
+      leaf("add_tag", { tag_id: "tapped-hi" }, 0, "s1", "yes"),
+      leaf("add_tag", { tag_id: "else-tag" }, 1, "s1", "no"),
+    ];
+
+    // Webhook sets message_text = reply title for interactive taps.
+    await runWithText("hi");
+
+    expect(h.state.tagInserts).toHaveLength(1);
+    expect(h.state.tagInserts[0]).toMatchObject({ tag_id: "tapped-hi" });
   });
 });

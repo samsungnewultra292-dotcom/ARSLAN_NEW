@@ -46,6 +46,7 @@ describe("validateStepsForActivation", () => {
     const issues = validateStepsForActivation([
       { step_type: "wait", step_config: { amount: 0, unit: "minutes" } },
       { step_type: "wait", step_config: { amount: 5, unit: "seconds" } },
+      { step_type: "wait", step_config: { amount: 30, unit: "eons" } },
       { step_type: "wait", step_config: { amount: -1, unit: "hours" } },
       {
         step_type: "wait",
@@ -54,9 +55,9 @@ describe("validateStepsForActivation", () => {
     ]);
     expect(issues.map((i) => i.path)).toEqual([
       "steps[0].amount",
-      "steps[1].unit",
-      "steps[2].amount",
+      "steps[2].unit",
       "steps[3].amount",
+      "steps[4].amount",
     ]);
   });
 
@@ -204,6 +205,124 @@ describe("validateStepsForActivation", () => {
       "steps[0].operand",
       "steps[0].subject",
     ]);
+  });
+
+  it("accepts a single-rule multi-condition (IF + ELSE)", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "condition",
+        step_config: {
+          subject: "message_content",
+          rules: [{ subject: "message_content", operator: "exact", value: "hi", branch_key: "yes" }],
+        },
+        branches: {
+          yes: [{ step_type: "add_tag", step_config: { tag_id: "t" } }],
+          no: [{ step_type: "close_conversation", step_config: {} }],
+        },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it("validates multi-rule conditions rule by rule", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "condition",
+        step_config: {
+          subject: "message_content",
+          rules: [
+            { subject: "message_content", operator: "exact", value: "hi", branch_key: "yes" },
+            { subject: "weird_subject", value: "x", branch_key: "b1" },
+            { subject: "tag_presence", branch_key: "b2" },
+            { subject: "message_content", operator: "fuzzy", value: "y", branch_key: "b3" },
+          ],
+        },
+      },
+    ]);
+    expect(issues.map((i) => i.path).sort()).toEqual([
+      "steps[0].rules[1].subject",
+      "steps[0].rules[2].operand",
+      "steps[0].rules[3].operator",
+    ]);
+  });
+
+  it("validates send_message optional media + buttons", () => {
+    const good = validateStepsForActivation([
+      {
+        step_type: "send_message",
+        step_config: {
+          text: "Pick one",
+          media: { kind: "image", url: "https://cdn.example/pic.png" },
+          buttons: [
+            { id: "a", type: "quick_reply", title: "Yes", value: "yes" },
+            { type: "url", title: "Docs", url: "https://docs.example.com" },
+          ],
+        },
+      },
+    ]);
+    expect(good).toEqual([]);
+  });
+
+  it("flags invalid media and button config", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_message",
+        step_config: {
+          media: { kind: "audio", url: "not a url" },
+          buttons: [
+            { id: "", type: "quick_reply", title: "", value: "" },
+            { type: "url", title: "", url: "ftp://nope" },
+          ],
+        },
+      },
+    ]);
+    const paths = issues.map((i) => i.path);
+    expect(paths).toContain("steps[0].media.kind");
+    expect(paths).toContain("steps[0].buttons.title");
+    expect(paths).toContain("steps[0].buttons.id");
+    expect(paths).toContain("steps[0].buttons.url");
+  });
+
+  it("rejects >3 quick replies and quick replies without a body", () => {
+    const tooMany = validateStepsForActivation([
+      {
+        step_type: "send_message",
+        step_config: {
+          buttons: [
+            { id: "1", type: "quick_reply", title: "A" },
+            { id: "2", type: "quick_reply", title: "B" },
+            { id: "3", type: "quick_reply", title: "C" },
+            { id: "4", type: "quick_reply", title: "D" },
+          ],
+        },
+      },
+    ]);
+    expect(tooMany.map((i) => i.path)).toContain("steps[0].buttons");
+
+    const noBody = validateStepsForActivation([
+      {
+        step_type: "send_message",
+        step_config: {
+          media: { kind: "image", url: "https://cdn.example/pic.png" },
+          buttons: [{ id: "a", type: "quick_reply", title: "A" }],
+        },
+      },
+    ]);
+    expect(noBody.map((i) => i.message)).toContain(
+      "quick replies need body text (message text or a URL button)",
+    );
+  });
+
+  it("does not require text when media or buttons are configured", () => {
+    const mediaOnly = validateStepsForActivation([
+      {
+        step_type: "send_message",
+        step_config: {
+          media: { kind: "video", url: "https://cdn.example/v.mp4" },
+        },
+      },
+    ]);
+    expect(mediaOnly).toEqual([]);
   });
 });
 

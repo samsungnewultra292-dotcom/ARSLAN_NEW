@@ -2,8 +2,9 @@
 // Automation builder step tree: addressing + immutable mutation.
 //
 // The builder edits a tree, not a list: root steps run in order, and a
-// `condition` step nests its children under `branches.yes` /
-// `branches.no`. Every mutation is addressed by a StepPath — one
+// `condition` step nests its children under branch buckets keyed `yes`
+// (IF), `b1`, `b2`, … (ELSE-IF) and `no` (ELSE/OTHER). Every mutation
+// is addressed by a StepPath — one
 // element per level, each naming the bucket it descends into and the
 // index within that bucket.
 //
@@ -26,13 +27,13 @@
  */
 export interface TreeStep<T> {
   cid: string
-  branches?: { yes: T[]; no: T[] }
+  branches?: Record<string, T[]>
 }
 
 /** Which bucket new children go into, for insertion. */
 export type ParentScope =
   | { kind: "root" }
-  | { kind: "branch"; parentCid: string; branch: "yes" | "no" }
+  | { kind: "branch"; parentCid: string; branch: string }
 
 /**
  * One level of addressing: which bucket, and the index within it. The
@@ -41,7 +42,7 @@ export type ParentScope =
  */
 export type StepMarker =
   | { kind: "root"; index: number }
-  | { kind: "branch"; branch: "yes" | "no"; index: number }
+  | { kind: "branch"; branch: string; index: number }
 
 export type StepPath = StepMarker[]
 
@@ -89,25 +90,23 @@ export function insertAt<T extends TreeStep<T>>(
     copy.splice(index, 0, node)
     return copy
   }
-  return steps.map((step) => {
-    if (!step.branches) return step
-    if (step.cid === scope.parentCid) {
-      const bucket = [...step.branches[scope.branch]]
-      bucket.splice(index, 0, node)
-      return {
-        ...step,
-        branches: { ...step.branches, [scope.branch]: bucket },
+return steps.map((step) => {
+      if (!step.branches) return step
+      if (step.cid === scope.parentCid) {
+        const bucket = [...(step.branches[scope.branch] ?? [])]
+        bucket.splice(index, 0, node)
+        return {
+          ...step,
+          branches: { ...step.branches, [scope.branch]: bucket },
+        }
       }
-    }
-    // Not this condition — keep looking inside both of its branches.
-    return {
-      ...step,
-      branches: {
-        yes: insertAt(step.branches.yes, scope, index, node),
-        no: insertAt(step.branches.no, scope, index, node),
-      },
-    }
-  })
+      // Not this condition — keep looking inside every one of its branches.
+      const nextBranches: Record<string, T[]> = {}
+      for (const [key, kids] of Object.entries(step.branches)) {
+        nextBranches[key] = insertAt(kids, scope, index, node)
+      }
+      return { ...step, branches: nextBranches }
+    })
 }
 
 /** Replace the step at `path` with `updater`'s result. */

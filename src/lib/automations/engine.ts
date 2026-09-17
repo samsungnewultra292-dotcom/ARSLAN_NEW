@@ -3,6 +3,7 @@ import type {
   AutomationLogStepResult,
   AutomationStep,
   AutomationTriggerType,
+  ConditionRule,
   ConditionStepConfig,
   KeywordMatchTriggerConfig,
   InteractiveReplyTriggerConfig,
@@ -21,8 +22,18 @@ import type {
 import { supabaseAdmin } from './admin-client'
 import { addContactTagIfAbsent } from '@/lib/contacts/tag-write'
 import { MAX_TAG_CHAIN_DEPTH, getTagChainDepth } from '@/lib/contacts/tag-chain'
-import { engineSendText, engineSendTemplate, engineSendInteractive } from './meta-send'
-import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
+import {
+  engineSendText,
+  engineSendTemplate,
+  engineSendInteractive,
+  engineSendMedia,
+} from './meta-send'
+import {
+  rulesFromConfig,
+  defaultRuleBranchKey,
+  CONDITION_ELSE_BRANCH_KEY,
+} from './condition-keys'
+import { validateInteractivePayload, type InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
 
 // ------------------------------------------------------------
@@ -134,7 +145,7 @@ export async function resumePendingExecution(pending: {
   contact_id: string | null
   log_id: string | null
   parent_step_id: string | null
-  branch: 'yes' | 'no' | null
+  branch: string | null
   next_step_position: number
   context: AutomationContext
 }): Promise<void> {
@@ -235,7 +246,7 @@ interface ExecuteArgs {
   contactId: string | null
   context: AutomationContext
   parentStepId: string | null
-  branch: 'yes' | 'no' | null
+  branch: string | null
   startPosition: number
   logId: string | null
   triggerEvent: string
@@ -307,19 +318,22 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
     try {
       if (step.step_type === 'condition') {
         const cfg = step.step_config as ConditionStepConfig
-        const taken = await evaluateCondition(cfg, args)
+        // Resolve the single branch this condition routes to. Rules are
+        // evaluated in order (IF → ELSE-IF …); the first match wins its
+        // own bucket, and when none match the ELSE bucket (`no`) runs.
+        const branchKey = await resolveConditionBranch(cfg, args)
         results.push({
           step_id: step.id,
           step_type: 'condition',
           status: 'success',
-          detail: `branch=${taken ? 'yes' : 'no'}`,
+          detail: `branch=${branchKey}`,
         })
         // Recurse into the chosen branch at position 0 (children use their
         // own ordering within the branch scope).
         await executeStepsFrom({
           ...args,
           parentStepId: step.id,
-          branch: taken ? 'yes' : 'no',
+          branch: branchKey,
           startPosition: 0,
           logId: args.logId,
         })
@@ -362,17 +376,101 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'send_message': {
       const cfg = step.step_config as SendMessageStepConfig
       if (!args.contactId) throw new Error('send_message needs a contact')
-      const text = interpolate(cfg.text, args)
-      if (!text.trim()) throw new Error('send_message has empty text')
       const conversationId = await resolveConversationId(args)
-      const { whatsapp_message_id } = await engineSendText({
-        accountId: args.automation.account_id,
-        userId: args.automation.user_id,
-        conversationId,
-        contactId: args.contactId,
-        text,
+
+      const text = interpolate(cfg.text ?? '', args)
+      const quickReplies = (cfg.buttons ?? []).filter(
+        (b) => b.type === 'quick_reply' && (b.title?.trim() || b.id?.trim()),
+      )
+      const urlButtons = (cfg.buttons ?? []).filter(
+        (b) => b.type === 'url' && b.url?.trim(),
+      )
+      const hasMedia = Boolean(cfg.media?.url?.trim())
+      const hasQuickReplies = quickReplies.length > 0
+      const hasText = Boolean(text.trim())
+
+      if (!hasMedia && !hasText && urlButtons.length === 0 && !hasQuickReplies) {
+        throw new Error('send_message has nothing to send')
+      }
+
+      // URL buttons aren't supported by the WhatsApp interactive API, so
+      // each renders as a tappable link line appended to the text.
+      const linkLines = urlButtons.map((b) => {
+        const label = interpolate(b.title ?? '', args).trim()
+        const url = interpolate(String(b.url ?? ''), args).trim()
+        return label ? `${label}: ${url}` : url
       })
-      return `sent via Meta (${whatsapp_message_id})`
+
+      const sent: string[] = []
+
+      // Media first so the caption reads naturally above the buttons.
+      if (hasMedia) {
+        const mediaKind = cfg.media!.kind === 'video' ? 'video' : 'image'
+        const caption = hasText ? text : undefined
+        if (caption && caption.length > 1024) {
+          throw new Error('media caption exceeds the 1024-character limit')
+        }
+        const { whatsapp_message_id } = await engineSendMedia({
+          accountId: args.automation.account_id,
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          kind: mediaKind,
+          link: cfg.media!.url.trim(),
+          caption,
+          filename: cfg.media!.name,
+        })
+        sent.push(`media(${mediaKind}) ${whatsapp_message_id}`)
+      }
+
+      if (hasQuickReplies) {
+        if (quickReplies.length > 3) {
+          throw new Error('send_message supports at most 3 quick replies')
+        }
+        // The interactive body re-uses the message text (it may also have
+        // doubled as the media caption) plus any URL-button lines. Mirrors
+        // validate.ts so save-time checks match runtime behaviour.
+        const bodyParts = hasMedia && linkLines.length > 0 ? linkLines : [text, ...linkLines]
+        const bodyText = bodyParts.filter(Boolean).join('\n')
+        if (!bodyText.trim()) {
+          throw new Error('send_message with quick replies needs body text')
+        }
+        const payload: InteractiveMessagePayload = {
+          kind: 'buttons',
+          body: bodyText,
+          header: undefined,
+          footer: undefined,
+          buttons: quickReplies.map((b) => ({
+            id: interpolate(b.id ?? '', args),
+            title: interpolate(b.title ?? '', args),
+          })),
+        }
+        const check = validateInteractivePayload(payload)
+        if (!check.ok) throw new Error(check.error)
+        const { whatsapp_message_id } = await engineSendInteractive({
+          accountId: args.automation.account_id,
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          payload,
+        })
+        sent.push(`interactive ${whatsapp_message_id}`)
+      }
+
+      if (!hasMedia && !hasQuickReplies) {
+        if (!text.trim()) throw new Error('send_message has empty text')
+        const fullText = [text, ...linkLines].filter(Boolean).join('\n')
+        const { whatsapp_message_id } = await engineSendText({
+          accountId: args.automation.account_id,
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          text: fullText,
+        })
+        sent.push(`text ${whatsapp_message_id}`)
+      }
+
+      return `sent via Meta (${sent.join(', ')})`
     }
 
     case 'send_buttons':
@@ -733,11 +831,26 @@ export function triggerMatches(automation: Automation, ctx: AutomationContext | 
   return true
 }
 
-async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): Promise<boolean> {
+/**
+ * Resolve which branch a condition's rules route to. Rules evaluate in
+ * order (IF → ELSE-IF …); the first match returns its branch_key bucket.
+ * When no rule matches, the ELSE / OTHER bucket (`no`) runs.
+ */
+async function resolveConditionBranch(cfg: ConditionStepConfig, args: ExecuteArgs): Promise<string> {
+  const rules = rulesFromConfig(cfg)
+  for (const rule of rules) {
+    if (await evaluateConditionRule(rule, args)) {
+      return rule.branch_key ?? defaultRuleBranchKey(0)
+    }
+  }
+  return CONDITION_ELSE_BRANCH_KEY
+}
+
+async function evaluateConditionRule(rule: ConditionRule, args: ExecuteArgs): Promise<boolean> {
   const db = supabaseAdmin()
-  switch (cfg.subject) {
+  switch (rule.subject) {
     case 'tag_presence': {
-      if (!args.contactId || !cfg.operand) return false
+      if (!args.contactId || !rule.operand) return false
       // contact_tags has no account_id column (its RLS keys off the parent
       // contact), so tenant scoping here relies on the contact-ownership
       // guard in runAutomationsForTrigger.
@@ -745,30 +858,38 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
         .from('contact_tags')
         .select('id', { count: 'exact', head: true })
         .eq('contact_id', args.contactId)
-        .eq('tag_id', cfg.operand)
+        .eq('tag_id', rule.operand)
       return (count ?? 0) > 0
     }
     case 'contact_field': {
-      if (!args.contactId || !cfg.operand) return false
+      if (!args.contactId || !rule.operand) return false
       // Scope to the account so the condition can't be turned into a
       // cross-tenant read oracle via the service-role client.
       const { data } = await db
         .from('contacts')
-        .select(cfg.operand)
+        .select(rule.operand)
         .eq('id', args.contactId)
         .eq('account_id', args.automation.account_id)
         .maybeSingle()
-      const v = (data as Record<string, unknown> | null)?.[cfg.operand]
-      return v != null && String(v) === String(cfg.value ?? '')
+      const v = (data as Record<string, unknown> | null)?.[rule.operand]
+      return v != null && String(v) === String(rule.value ?? '')
     }
     case 'message_content': {
       const text = (args.context.message_text ?? '').toString()
-      return text.toLowerCase().includes((cfg.value ?? '').toLowerCase())
+      const expected = rule.value ?? ''
+      const operator = rule.operator ?? 'contains'
+      if (operator === 'exact') {
+        return text.trim().toLowerCase() === expected.trim().toLowerCase()
+      }
+      if (operator === 'word') {
+        return matchesWholeWord(text, expected, false)
+      }
+      return text.toLowerCase().includes(expected.toLowerCase())
     }
     case 'time_of_day': {
       // operand form "HH:mm-HH:mm" — true if now is within that window
       // (supports over-midnight ranges like "18:00-09:00").
-      const [from, to] = (cfg.operand ?? '').split('-')
+      const [from, to] = (rule.operand ?? '').split('-')
       if (!from || !to) return false
       const now = new Date()
       const mins = now.getHours() * 60 + now.getMinutes()
@@ -786,7 +907,14 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
 }
 
 function waitMs(cfg: WaitStepConfig): number {
-  const unitMs = cfg.unit === 'days' ? 86_400_000 : cfg.unit === 'hours' ? 3_600_000 : 60_000
+  const unitMs =
+    cfg.unit === 'days'
+      ? 86_400_000
+      : cfg.unit === 'hours'
+        ? 3_600_000
+        : cfg.unit === 'seconds'
+          ? 1_000
+          : 60_000
   return Math.max(1_000, cfg.amount * unitMs)
 }
 

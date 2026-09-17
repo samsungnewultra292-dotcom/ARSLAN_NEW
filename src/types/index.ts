@@ -540,8 +540,49 @@ export type AutomationTriggerConfig =
   | InteractiveReplyTriggerConfig
   | Record<string, unknown>;
 
+export interface SendMessageMediaConfig {
+  /** `image` | `video` — the only media kinds the Send Message action sends. */
+  kind: 'image' | 'video';
+  /** Public URL Meta fetches at send time (uploaded via the flow-media bucket). */
+  url: string;
+  /** Original file name, kept for display / re-upload bookkeeping. */
+  name?: string;
+}
+
+export type SendMessageButtonType = 'quick_reply' | 'url';
+
+export interface SendMessageButtonConfig {
+  /**
+   * Stable button id. For quick replies this is echoed back verbatim by
+   * Meta when the button is tapped, so the If/Else engine (and the
+   * interactive_reply trigger) can match on it exactly.
+   */
+  id: string;
+  /** Button kind. */
+  type: SendMessageButtonType;
+  /** Visible label. */
+  title: string;
+  /**
+   * quick_reply only: the value delivered as the user's response when
+   * tapped. Defaults to `title`.
+   */
+  value?: string;
+  /** url only: absolute destination opened when tapped (https). */
+  url?: string;
+}
+
 export interface SendMessageStepConfig {
+  /** May be empty when the step sends media and/or buttons only. */
   text: string;
+  /** Optional image/video attached to the message. */
+  media?: SendMessageMediaConfig;
+  /**
+   * Optional up to 3 quick replies (native Meta interactive buttons) plus
+   * any number of URL buttons. URL buttons aren't supported by the WhatsApp
+   * interactive API, so each is rendered as a tappable link line appended
+   * to the outgoing text.
+   */
+  buttons?: SendMessageButtonConfig[];
 }
 
 /**
@@ -589,7 +630,7 @@ export interface CreateDealStepConfig {
 
 export interface WaitStepConfig {
   amount: number;
-  unit: 'minutes' | 'hours' | 'days';
+  unit: 'seconds' | 'minutes' | 'hours' | 'days';
 }
 
 export type ConditionSubject =
@@ -598,12 +639,40 @@ export type ConditionSubject =
   | 'message_content'
   | 'time_of_day';
 
+/** Semantic lookup ops for message_content. `word` matches a bounded whole word. */
+export type MessageConditionOperator = 'contains' | 'exact' | 'word';
+
+/** One IF / ELSE-IF rule in a condition block. */
+export interface ConditionRule {
+  subject: ConditionSubject;
+  /** e.g. field name, tag id, or "HH:mm-HH:mm" depending on subject */
+  operand?: string;
+  /** Quick Reply / keyword matcher. Defaults to `contains`. */
+  operator?: MessageConditionOperator;
+  /** For contact_field equals / message_content — comparison value */
+  value?: string;
+  /**
+   * Which child bucket this rule's matched branch routes to: `yes` for the
+   * first (IF) rule, `b1`, `b2`, … for each subsequent (ELSE-IF) rule.
+   * Stored explicitly so removing a rule never re-keys later branches.
+   */
+  branch_key?: string;
+}
+
 export interface ConditionStepConfig {
   subject: ConditionSubject;
   /** e.g. field name, tag id, substring, or "HH:mm-HH:mm" depending on subject */
   operand?: string;
   /** For contact_field equals / message_content contains — comparison value */
   value?: string;
+  /**
+   * Multi-condition (IF → ELSE-IF … → ELSE/OTHER) support. Rules are
+   * evaluated in order against the same context; the first match routes to
+   * its `branch_key` bucket and later rules are skipped. When no rule
+   * matches, the ELSE (`no`) bucket executes. When absent, the legacy
+   * `subject`/`operand`/`value` fields form the single IF rule.
+   */
+  rules?: ConditionRule[];
 }
 
 export interface SendWebhookStepConfig {

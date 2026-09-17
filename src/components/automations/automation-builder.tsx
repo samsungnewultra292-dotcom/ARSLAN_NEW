@@ -2,8 +2,10 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
@@ -33,6 +35,10 @@ import {
   ArrowUp,
   MousePointerClick,
   List,
+  Image as ImageIcon,
+  Video,
+  Send,
+  X,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -49,10 +55,13 @@ import type {
   AccountMember,
   AutomationStepType,
   AutomationTriggerType,
+  ConditionRule,
+  ConditionStepConfig,
   CustomField,
   InteractiveMessagePayload,
   KeywordMatchTriggerConfig,
   MessageTemplate,
+  SendMessageStepConfig,
   Tag as TagRecord,
 } from "@/types"
 import {
@@ -62,6 +71,14 @@ import {
 } from "@/components/interactive/interactive-builder"
 import { interactivePayloadPreviewText } from "@/lib/whatsapp/interactive"
 import { createClient } from "@/lib/supabase/client"
+import {
+  uploadAccountMedia,
+  MEDIA_MAX_BYTES_BY_KIND,
+} from "@/lib/storage/upload-media"
+import {
+  conditionBranchKeys,
+  nextAutoRuleKey,
+} from "@/lib/automations/condition-keys"
 import {
   childPath,
   insertAt,
@@ -82,7 +99,7 @@ export interface BuilderStep {
   cid: string
   step_type: AutomationStepType
   step_config: Record<string, unknown>
-  branches?: { yes: BuilderStep[]; no: BuilderStep[] }
+  branches?: Record<string, BuilderStep[]>
 }
 
 export interface BuilderInitial {
@@ -169,6 +186,12 @@ function toStepConfig(p: InteractiveMessagePayload): Record<string, unknown> {
 function asInteractive(cfg: Record<string, unknown>): InteractiveMessagePayload {
   return cfg as unknown as InteractiveMessagePayload
 }
+function asSendMessage(cfg: Record<string, unknown>): SendMessageStepConfig {
+  return cfg as unknown as SendMessageStepConfig
+}
+function asCondition(cfg: Record<string, unknown>): ConditionStepConfig {
+  return cfg as unknown as ConditionStepConfig
+}
 
 function blankConfig(type: AutomationStepType): Record<string, unknown> {
   switch (type) {
@@ -192,7 +215,17 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
     case "wait":
       return { amount: 1, unit: "hours" }
     case "condition":
-      return { subject: "tag_presence", operand: "", value: "" }
+      // New conditions are born as a single IF rule (the editor can add
+      // ELSE-IF rules and an ELSE/OTHER fallback runs automatically when
+      // no rule matches).
+      return {
+        subject: "message_content",
+        operand: "",
+        value: "",
+        rules: [
+          { subject: "message_content", operator: "exact", value: "", branch_key: "yes" },
+        ],
+      }
     case "send_webhook":
       return { url: "", headers: {}, body_template: "" }
     case "close_conversation":
@@ -655,7 +688,7 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
       cid: cid(),
       step_type: type,
       step_config: blankConfig(type),
-      branches: type === "condition" ? { yes: [], no: [] } : undefined,
+      branches: type === "condition" ? {} : undefined,
     }
     setState((s) => ({ ...s, steps: insertAt(s.steps, parent, index, node) }))
     setExpandedId(node.cid)
@@ -1207,31 +1240,44 @@ function ConditionBranches({
   path: StepPath
 } & Omit<StepListProps, "steps" | "basePath" | "scope">) {
   const t = useTranslations("Automations.builder")
-  const yes = step.branches?.yes ?? []
-  const no = step.branches?.no ?? []
+  const cfg = asCondition(step.step_config)
+  const hasRules = Array.isArray(cfg.rules) && cfg.rules.length > 0
+  const keys = conditionBranchKeys(cfg)
+
+  // Branch header per key. Legacy conditions (no `rules`) keep Yes/No;
+  // multi-rule conditions read IF / ELSE IF n / ELSE.
+  function labelFor(key: string): string {
+    if (key === "yes") return hasRules ? t("branches.if") : t("branches.yes")
+    if (key === "no") return hasRules ? t("branches.else") : t("branches.no")
+    return `${t("branches.elseIf")} ${key.slice(1)}`
+  }
+
   return (
-    // Stack Yes/No vertically until THIS CARD is wide enough for two
-    // columns. A viewport breakpoint can't tell: a condition nested in
+    // Stack branch columns vertically until THIS CARD is wide enough for
+    // two columns. A viewport breakpoint can't tell: a condition nested in
     // a branch is a fraction of the screen, and `sm:grid-cols-2` split
     // it anyway, leaving two columns too narrow to render a step in.
     <div className="@container mt-3 w-full">
       <div className="grid grid-cols-1 gap-3 @sm:grid-cols-2">
-        <BranchColumn label={t("branches.yes")} color="text-primary">
-          <StepList
-            {...props}
-            steps={yes}
-            basePath={path}
-            scope={{ kind: "branch", parentCid: step.cid, branch: "yes" }}
-          />
-        </BranchColumn>
-        <BranchColumn label={t("branches.no")} color="text-rose-400">
-          <StepList
-            {...props}
-            steps={no}
-            basePath={path}
-            scope={{ kind: "branch", parentCid: step.cid, branch: "no" }}
-          />
-        </BranchColumn>
+        {keys.map((key, i) => (
+          <BranchColumn
+            key={key}
+            label={labelFor(key)}
+            color={key === "no" ? "text-rose-400" : "text-primary"}
+          >
+            <StepList
+              {...props}
+              steps={step.branches?.[key] ?? []}
+              basePath={path}
+              scope={{ kind: "branch", parentCid: step.cid, branch: key }}
+            />
+            {i === keys.length - 1 && hasRules && (
+              <p className="mt-1 px-2 text-center text-[10px] uppercase tracking-wide text-muted-foreground">
+                {t("branches.otherHint")}
+              </p>
+            )}
+          </BranchColumn>
+        ))}
       </div>
     </div>
   )
@@ -1304,16 +1350,7 @@ function StepEditor({
 
   switch (step.step_type) {
     case "send_message":
-      return (
-        <FieldBlock label={t("config.messageText")}>
-          <Textarea
-            value={(cfg.text as string) ?? ""}
-            onChange={(e) => set({ text: e.target.value })}
-            placeholder={t("config.placeholderMessageText")}
-            className="min-h-24 bg-muted text-foreground"
-          />
-        </FieldBlock>
-      )
+      return <SendMessageEditor step={step} onChange={onChange} t={t} />
     case "send_buttons":
     case "send_list":
       // The whole step_config IS the interactive payload; the shared
@@ -1434,6 +1471,7 @@ function StepEditor({
               onChange={(e) => set({ unit: e.target.value })}
               className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm text-foreground"
             >
+              <option value="seconds">{t("config.units.seconds")}</option>
               <option value="minutes">{t("config.units.minutes")}</option>
               <option value="hours">{t("config.units.hours")}</option>
               <option value="days">{t("config.units.days")}</option>
@@ -1442,47 +1480,7 @@ function StepEditor({
         </div>
       )
     case "condition":
-      return (
-        <>
-          <FieldBlock label={t("config.subjectLabel")}>
-            <select
-              value={(cfg.subject as string) ?? "tag_presence"}
-              onChange={(e) => set({ subject: e.target.value })}
-              className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm text-foreground"
-            >
-              <option value="tag_presence">{t("config.subjects.tag_presence")}</option>
-              <option value="contact_field">{t("config.subjects.contact_field")}</option>
-              <option value="message_content">{t("config.subjects.message_content")}</option>
-              <option value="time_of_day">{t("config.subjects.time_of_day")}</option>
-            </select>
-          </FieldBlock>
-          <FieldBlock label={t("config.operandLabel")}>
-            <Input
-              placeholder={
-                cfg.subject === "time_of_day"
-                  ? t("config.placeholderTime")
-                  : cfg.subject === "contact_field"
-                  ? t("config.placeholderContact")
-                  : cfg.subject === "tag_presence"
-                  ? t("config.placeholderTag")
-                  : ""
-              }
-              value={(cfg.operand as string) ?? ""}
-              onChange={(e) => set({ operand: e.target.value })}
-              className="bg-muted text-foreground"
-            />
-          </FieldBlock>
-          {(cfg.subject === "contact_field" || cfg.subject === "message_content") && (
-            <FieldBlock label={t("config.valueLabel")}>
-              <Input
-                value={(cfg.value as string) ?? ""}
-                onChange={(e) => set({ value: e.target.value })}
-                className="bg-muted text-foreground"
-              />
-            </FieldBlock>
-          )}
-        </>
-      )
+      return <ConditionEditor step={step} onChange={onChange} t={t} />
     case "send_webhook":
       return (
         <>
@@ -1513,6 +1511,542 @@ function StepEditor({
   }
 }
 
+// ------------------------------------------------------------
+// send_message editor: optional image/video + quick replies (native
+// Meta buttons, ≤3) + URL buttons (tappable link lines in the body).
+// ------------------------------------------------------------
+
+const MEDIA_ACCEPT: Record<"image" | "video", string> = {
+  image: "image/png,image/jpeg,image/webp",
+  video: "video/mp4,video/3gpp",
+}
+
+const FLOW_MEDIA_BUCKET = "flow-media"
+
+function SendMessageEditor({
+  step,
+  onChange,
+  t,
+}: {
+  step: BuilderStep
+  onChange: (s: BuilderStep) => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const cfg = asSendMessage(step.step_config)
+  const set = (patch: Record<string, unknown>) =>
+    onChange({ ...step, step_config: { ...cfg, ...patch } })
+
+  return (
+    <>
+      <FieldBlock label={t("config.messageText")}>
+        <Textarea
+          value={cfg.text ?? ""}
+          onChange={(e) => set({ text: e.target.value })}
+          placeholder={t("config.placeholderMessageText")}
+          className="min-h-24 bg-muted text-foreground"
+        />
+      </FieldBlock>
+      <SendMediaSection cfg={cfg} onChange={set} t={t} />
+      <FieldBlock label={t("config.buttonsLabel")}>
+        <SendButtonsEditor cfg={cfg} onChange={set} t={t} />
+      </FieldBlock>
+    </>
+  )
+}
+
+function SendMediaSection({
+  cfg,
+  onChange,
+  t,
+}: {
+  cfg: SendMessageStepConfig
+  onChange: (patch: Record<string, unknown>) => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [pendingKind, setPendingKind] = useState<"image" | "video">("image")
+  const [uploading, setUploading] = useState(false)
+  const media = cfg.media
+
+  const handleFile = useCallback(
+    async (file: File) => {
+      const kind = pendingKind
+      const max = MEDIA_MAX_BYTES_BY_KIND[kind]
+      if (file.size > max) {
+        toast.error(
+          t("config.mediaTooLarge", {
+            size: (file.size / 1024 / 1024).toFixed(1),
+            limit: (max / 1024 / 1024).toFixed(0),
+          }),
+        )
+        return
+      }
+      setUploading(true)
+      try {
+        const { publicUrl } = await uploadAccountMedia(FLOW_MEDIA_BUCKET, file)
+        onChange({ media: { kind, url: publicUrl, name: file.name } })
+        toast.success(t("config.mediaUploaded"))
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : t("config.mediaUploadFailed"))
+      } finally {
+        setUploading(false)
+      }
+    },
+    [pendingKind, onChange, t],
+  )
+
+  return (
+    <div className="mb-2 rounded-md border border-border p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <label className="text-xs font-medium text-muted-foreground">
+          {t("config.mediaLabel")}
+        </label>
+        {media && (
+          <button
+            type="button"
+            onClick={() => onChange({ media: undefined })}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-rose-400"
+          >
+            <X className="h-3 w-3" />
+            {t("config.mediaRemove")}
+          </button>
+        )}
+      </div>
+
+      {!media ? (
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setPendingKind("image")
+              fileInputRef.current?.click()
+            }}
+          >
+            <ImageIcon className="h-3.5 w-3.5" />
+            {t("config.mediaImage")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setPendingKind("video")
+              fileInputRef.current?.click()
+            }}
+          >
+            <Video className="h-3.5 w-3.5" />
+            {t("config.mediaVideo")}
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <select
+            value={media.kind}
+            onChange={(e) => {
+              const kind = e.target.value as "image" | "video"
+              // Type change clears the file — the bucket's accept lists
+              // differ per kind, so reuse the flows-media behaviour.
+              onChange({ media: { kind, url: "", name: "" } })
+            }}
+            className={SELECT_CLASS}
+          >
+            <option value="image">{t("config.mediaImage")}</option>
+            <option value="video">{t("config.mediaVideo")}</option>
+          </select>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs text-foreground">
+              {media.name || media.url.split("/").pop() || t("config.mediaFile")}
+            </div>
+            <div className="truncate text-[10px] text-muted-foreground">{media.url}</div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {uploading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Send className="h-3.5 w-3.5" />
+            )}
+            {t("config.mediaChange")}
+          </Button>
+        </div>
+      )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={MEDIA_ACCEPT[pendingKind]}
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ""
+          if (file) void handleFile(file)
+        }}
+      />
+    </div>
+  )
+}
+
+function SendButtonsEditor({
+  cfg,
+  onChange,
+  t,
+}: {
+  cfg: SendMessageStepConfig
+  onChange: (patch: Record<string, unknown>) => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const buttons = cfg.buttons ?? []
+
+  function update(index: number, patch: Record<string, unknown>) {
+    onChange({
+      buttons: buttons.map((b, i) => (i === index ? { ...b, ...patch } : b)),
+    })
+  }
+  function remove(index: number) {
+    onChange({ buttons: buttons.filter((_, i) => i !== index) })
+  }
+  const quickReplyCount = buttons.filter((b) => b.type === "quick_reply").length
+
+  function add(kind: "quick_reply" | "url") {
+    if (kind === "quick_reply" && quickReplyCount >= 3) {
+      toast.error(t("config.quickReplyLimit"))
+      return
+    }
+    onChange({
+      buttons: [
+        ...buttons,
+        kind === "quick_reply"
+          ? { id: cid(), type: "quick_reply", title: "", value: "" }
+          : { id: cid(), type: "url", title: "", url: "https://" },
+      ],
+    })
+  }
+
+  return (
+    <div className="space-y-2">
+      {buttons.length === 0 && (
+        <div className="rounded-md border border-dashed border-border px-3 py-2 text-[11px] text-muted-foreground">
+          {t("config.buttonsEmpty")}
+        </div>
+      )}
+      {buttons.map((b, i) => (
+        <div key={b.id || i} className="space-y-2 rounded-md border border-border p-2">
+          <div className="flex items-center gap-2">
+            <select
+              value={b.type}
+              onChange={(e) =>
+                update(i, { type: e.target.value as "quick_reply" | "url" })
+              }
+              className={cn(SELECT_CLASS, "w-auto")}
+            >
+              <option value="quick_reply">{t("config.buttonQuickReply")}</option>
+              <option value="url">{t("config.buttonUrl")}</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              className="ml-auto flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-rose-400"
+              aria-label={t("delete")}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+              {t("config.buttonTitleLabel")}
+            </label>
+            <Input
+              value={b.title ?? ""}
+              onChange={(e) => update(i, { title: e.target.value })}
+              className="bg-muted text-foreground"
+            />
+          </div>
+          {b.type === "quick_reply" ? (
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                {t("config.buttonValueLabel")}
+              </label>
+              <Input
+                value={b.value ?? ""}
+                onChange={(e) => update(i, { value: e.target.value })}
+                placeholder={b.title ?? ""}
+                className="bg-muted text-foreground"
+              />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {t("config.buttonValueHint")}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                {t("config.buttonUrlLabel")}
+              </label>
+              <Input
+                type="url"
+                value={b.url ?? ""}
+                onChange={(e) => update(i, { url: e.target.value })}
+                className="bg-muted font-mono text-xs text-foreground"
+              />
+            </div>
+          )}
+        </div>
+      ))}
+      <div className="flex items-center gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className="flex h-8 items-center gap-1 rounded-md border border-border bg-muted px-2 text-xs text-foreground transition-colors hover:border-primary hover:text-primary"
+            aria-label={t("config.addButton")}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("config.addButton")}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-40 border-border bg-popover">
+            <DropdownMenuItem onClick={() => add("quick_reply")}>
+              {t("config.addQuickReply")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => add("url")}>
+              {t("config.addUrlButton")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {quickReplyCount >= 3 && (
+          <p className="text-[10px] text-amber-500">{t("config.quickReplyLimit")}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------
+// condition editor: IF → ELSE-IF … with an ELSE/OTHER fallback
+// ------------------------------------------------------------
+
+function ConditionEditor({
+  step,
+  onChange,
+  t,
+}: {
+  step: BuilderStep
+  onChange: (s: BuilderStep) => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const cfg = asCondition(step.step_config)
+  const rules = Array.isArray(cfg.rules) && cfg.rules.length > 0 ? cfg.rules : null
+
+  // Legacy configs (no `rules`) edit the single inline condition straight
+  // through; the first "Add else-if" migrates them into a rules array.
+  const displayRules: ConditionRule[] = rules
+    ? rules
+    : [
+        {
+          subject: cfg.subject ?? "message_content",
+          operand: cfg.operand,
+          operator: "contains",
+          value: cfg.value,
+          branch_key: "yes",
+        },
+      ]
+
+  function setConfig(next: ConditionStepConfig) {
+    onChange({ ...step, step_config: { ...step.step_config, ...next } })
+  }
+  function setStep(nextCfg: ConditionStepConfig, branches: Record<string, BuilderStep[]>) {
+    onChange({
+      ...step,
+      step_config: { ...step.step_config, ...nextCfg } as Record<string, unknown>,
+      branches,
+    })
+  }
+  function updateRule(index: number, patch: Partial<ConditionRule>) {
+    if (rules) {
+      setConfig({
+        ...cfg,
+        rules: rules.map((r, i) => (i === index ? { ...r, ...patch } : r)),
+      })
+    } else {
+      setConfig({ ...cfg, ...patch })
+    }
+  }
+  function addElseIf() {
+    const key = nextAutoRuleKey(displayRules)
+    const nextRule: ConditionRule = {
+      subject: (rules ? rules[0].subject : cfg.subject) ?? "message_content",
+      operator: "exact",
+      value: "",
+      branch_key: key,
+    }
+    const nextRules: ConditionRule[] = rules
+      ? [...rules, nextRule]
+      : [
+          {
+            subject: cfg.subject,
+            operand: cfg.operand,
+            operator: "contains",
+            value: cfg.value,
+            branch_key: "yes",
+          },
+          nextRule,
+        ]
+    setStep({ subject: cfg.subject, operand: cfg.operand, value: cfg.value, rules: nextRules }, {
+      ...(step.branches ?? {}),
+      [key]: [],
+    })
+  }
+  function removeRule(index: number) {
+    if (!rules) return
+    if (rules.length <= 1) return
+    const removed = rules[index]
+    const branches = { ...(step.branches ?? {}) }
+    if (removed.branch_key) delete branches[removed.branch_key]
+    setStep(
+      { ...cfg, rules: rules.filter((_, i) => i !== index) },
+      branches,
+    )
+  }
+
+  return (
+    <>
+      <div className="mb-2 space-y-2">
+        {displayRules.map((rule, i) => (
+          <ConditionRuleRow
+            key={rule.branch_key ?? i}
+            rule={rule}
+            index={i}
+            isFirst={i === 0}
+            removable={Boolean(rules) && rules!.length > 1}
+            onChange={(patch) => updateRule(i, patch)}
+            onRemove={() => removeRule(i)}
+            t={t}
+          />
+        ))}
+      </div>
+      <div className="mb-2 flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={addElseIf}>
+          <Plus className="h-3.5 w-3.5" />
+          {t("config.conditionAddElse")}
+        </Button>
+      </div>
+      <p className="mb-1 text-[11px] text-muted-foreground">{t("config.conditionElseHint")}</p>
+    </>
+  )
+}
+
+function ConditionRuleRow({
+  rule,
+  index,
+  isFirst,
+  removable,
+  onChange,
+  onRemove,
+  t,
+}: {
+  rule: ConditionRule
+  index: number
+  isFirst: boolean
+  removable: boolean
+  onChange: (patch: Partial<ConditionRule>) => void
+  onRemove: () => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const header = isFirst ? t("branches.if") : `${t("branches.elseIf")} ${index}`
+  return (
+    <div className="rounded-md border border-border p-2">
+      <div className="mb-2 flex items-center gap-2">
+        <span
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+            isFirst ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+          )}
+        >
+          {header}
+        </span>
+        {removable && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="ml-auto flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-rose-400"
+            aria-label={t("config.conditionRemove")}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      <div className="mb-2">
+        <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+          {t("config.subjectLabel")}
+        </label>
+        <select
+          value={rule.subject}
+          onChange={(e) => onChange({ subject: e.target.value as ConditionStepConfig["subject"] })}
+          className={SELECT_CLASS}
+        >
+          <option value="message_content">{t("config.subjects.message_content")}</option>
+          <option value="tag_presence">{t("config.subjects.tag_presence")}</option>
+          <option value="contact_field">{t("config.subjects.contact_field")}</option>
+          <option value="time_of_day">{t("config.subjects.time_of_day")}</option>
+        </select>
+      </div>
+
+      {rule.subject === "message_content" && (
+        <div className="mb-2">
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            {t("config.operatorLabel")}
+          </label>
+          <select
+            value={rule.operator ?? "contains"}
+            onChange={(e) => onChange({ operator: e.target.value as ConditionRule["operator"] })}
+            className={SELECT_CLASS}
+          >
+            <option value="contains">{t("config.operatorContains")}</option>
+            <option value="word">{t("config.operatorWord")}</option>
+            <option value="exact">{t("config.operatorExact")}</option>
+          </select>
+        </div>
+      )}
+
+      {(rule.subject === "contact_field" || rule.subject === "tag_presence" || rule.subject === "time_of_day") && (
+        <div className="mb-2">
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            {t("config.operandLabel")}
+          </label>
+          <Input
+            placeholder={
+              rule.subject === "time_of_day"
+                ? t("config.placeholderTime")
+                : rule.subject === "contact_field"
+                  ? t("config.placeholderContact")
+                  : t("config.placeholderTag")
+            }
+            value={rule.operand ?? ""}
+            onChange={(e) => onChange({ operand: e.target.value })}
+            className="bg-muted text-foreground"
+          />
+        </div>
+      )}
+
+      {(rule.subject === "message_content" || rule.subject === "contact_field") && (
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            {t("config.valueLabel")}
+          </label>
+          <Input
+            value={rule.value ?? ""}
+            onChange={(e) => onChange({ value: e.target.value })}
+            placeholder={
+              rule.subject === "message_content" ? t("config.placeholderValueMessage") : ""
+            }
+            className="bg-muted text-foreground"
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FieldBlock({
   label,
   children,
@@ -1530,8 +2064,19 @@ function FieldBlock({
 
 function previewFor(step: BuilderStep): string {
   switch (step.step_type) {
-    case "send_message":
-      return (step.step_config.text as string) || "no text yet"
+    case "send_message": {
+      const cfg = asSendMessage(step.step_config)
+      const bits: string[] = []
+      if (cfg.media?.url) bits.push(cfg.media.kind === "video" ? "video" : "image")
+      if (cfg.buttons && cfg.buttons.length > 0) {
+        bits.push(`${cfg.buttons.filter((b) => b.type === "quick_reply").length} quick replies`)
+        const urlCount = cfg.buttons.filter((b) => b.type === "url").length
+        if (urlCount > 0) bits.push(`${urlCount} url`)
+      }
+      const text = (cfg.text ?? "") as string
+      if (text.trim()) bits.unshift(text)
+      return bits.join(" · ") || "no content yet"
+    }
     case "send_buttons":
     case "send_list":
       return interactivePayloadPreviewText(asInteractive(step.step_config)) || "no body yet"
@@ -1539,8 +2084,13 @@ function previewFor(step: BuilderStep): string {
       return (step.step_config.template_name as string) || "pick a template"
     case "wait":
       return `${step.step_config.amount ?? "?"} ${step.step_config.unit ?? ""}`
-    case "condition":
-      return `when ${step.step_config.subject ?? "?"}`
+    case "condition": {
+      const cfg = asCondition(step.step_config)
+      if (Array.isArray(cfg.rules) && cfg.rules.length > 0) {
+        return `${cfg.rules.length} condition${cfg.rules.length > 1 ? "s" : ""} · ELSE/OTHER`
+      }
+      return `when ${cfg.subject ?? "?"}`
+    }
     case "send_webhook":
       return (step.step_config.url as string) || "no url"
     default:
@@ -1555,17 +2105,23 @@ function previewFor(step: BuilderStep): string {
 interface ApiStep {
   step_type: string
   step_config: Record<string, unknown>
-  branches?: { yes?: ApiStep[]; no?: ApiStep[] }
+  branches?: Record<string, ApiStep[]>
 }
 
 export function toApiSteps(steps: BuilderStep[]): ApiStep[] {
-  return steps.map((s) => ({
-    step_type: s.step_type,
-    step_config: s.step_config,
-    branches: s.branches
-      ? { yes: toApiSteps(s.branches.yes), no: toApiSteps(s.branches.no) }
-      : undefined,
-  }))
+  return steps.map((s) => {
+    const branches: Record<string, ApiStep[]> = {}
+    if (s.branches) {
+      for (const [key, kids] of Object.entries(s.branches)) {
+        branches[key] = toApiSteps(kids)
+      }
+    }
+    return {
+      step_type: s.step_type,
+      step_config: s.step_config,
+      branches: s.branches && Object.keys(s.branches).length > 0 ? branches : undefined,
+    }
+  })
 }
 
 /**
@@ -1576,20 +2132,22 @@ export interface ServerStepNode {
   id: string
   step_type: string
   step_config: Record<string, unknown>
-  branches: { yes: ServerStepNode[]; no: ServerStepNode[] }
+  branches: Record<string, ServerStepNode[]>
 }
 
 export function fromServerSteps(nodes: ServerStepNode[]): BuilderStep[] {
-  return nodes.map((n) => ({
-    cid: cid(),
-    step_type: n.step_type as AutomationStepType,
-    step_config: n.step_config ?? {},
-    branches:
-      n.step_type === "condition"
-        ? {
-            yes: fromServerSteps(n.branches?.yes ?? []),
-            no: fromServerSteps(n.branches?.no ?? []),
-          }
-        : undefined,
-  }))
+  return nodes.map((n) => {
+    const branches: Record<string, BuilderStep[]> = {}
+    if (n.step_type === "condition" && n.branches) {
+      for (const [key, kids] of Object.entries(n.branches)) {
+        branches[key] = fromServerSteps(kids)
+      }
+    }
+    return {
+      cid: cid(),
+      step_type: n.step_type as AutomationStepType,
+      step_config: n.step_config ?? {},
+      branches: n.step_type === "condition" ? branches : undefined,
+    }
+  })
 }

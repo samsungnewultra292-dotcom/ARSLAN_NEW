@@ -472,7 +472,11 @@
       "resultTags": "{count} tag atribuída",
       "resultTags_plural": "{count} tags atribuídas",
       "resultSkipped": "{count} ignorados",
+      "resultInvalidPhone": "{count} telefone inválido",
+      "resultInvalidPhone_plural": "{count} telefones inválidos",
       "resultFailed": "{count} com falha",
+      "failedRowsHeading": "Linhas com falha",
+      "unknownReason": "Erro desconhecido",
       "willBeCreated": "{name} (será criada na importação)",
       "columns": {
         "phone": "Telefone",
@@ -494,6 +498,8 @@
       "toastTagsSkipped": "Tags desconhecidas ignoradas (crie-as primeiro em Configurações): {sample}{more}",
       "toastSkipped": "{count} duplicado ignorado",
       "toastSkipped_plural": "{count} duplicados ignorados",
+      "toastInvalidPhone": "{count} contato não tinha um número de telefone utilizável",
+      "toastInvalidPhone_plural": "{count} contatos não tinham um número de telefone utilizável",
       "toastFailed": "{count} contato não pôde ser importado",
       "toastFailed_plural": "{count} contatos não puderam ser importados",
       "toastError": "Falha na importação"
@@ -1005,7 +1011,11 @@
       },
       "branches": {
         "yes": "Sim",
-        "no": "Não"
+        "no": "Não",
+        "if": "SE",
+        "elseIf": "SENÃO SE",
+        "else": "SENÃO",
+        "otherHint": "Executa quando nada acima corresponder"
       },
       "addStep": "Adicionar etapa",
       "moveUp": "Mover para cima",
@@ -1031,6 +1041,7 @@
         "amountLabel": "Quantidade",
         "unitLabel": "Unidade",
         "units": {
+          "seconds": "Segundos",
           "minutes": "Minutos",
           "hours": "Horas",
           "days": "Dias"
@@ -1056,6 +1067,35 @@
         "matchWord": "Palavra inteira",
         "matchWordHint": "Corresponde à palavra-chave apenas como palavra isolada, então \"k\" não dispara mais em \"thanks\". Ideal para palavras-chave curtas em idiomas com espaços; use Contém para idiomas escritos sem espaços.",
         "matchExact": "Exata",
+        "mediaLabel": "Mídia (opcional)",
+        "mediaImage": "Imagem",
+        "mediaVideo": "Vídeo",
+        "mediaFile": "Arquivo enviado",
+        "mediaChange": "Alterar",
+        "mediaRemove": "Remover",
+        "mediaUploaded": "Mídia enviada",
+        "mediaUploadFailed": "Falha no envio",
+        "mediaTooLarge": "O arquivo tem {size} MB — o limite para este tipo é {limit} MB.",
+        "buttonsLabel": "Botões (opcional)",
+        "buttonsEmpty": "Ainda não há botões — adicione uma resposta rápida ou um botão de URL.",
+        "buttonQuickReply": "Resposta rápida",
+        "buttonUrl": "Botão de URL",
+        "buttonTitleLabel": "Rótulo",
+        "buttonValueLabel": "Valor enviado",
+        "buttonValueHint": "O que a resposta do cliente carrega. Padrão: o rótulo.",
+        "buttonUrlLabel": "URL do link",
+        "addButton": "Adicionar botão",
+        "addQuickReply": "Resposta rápida",
+        "addUrlButton": "Botão de URL",
+        "quickReplyLimit": "O WhatsApp permite no máximo 3 respostas rápidas por mensagem.",
+        "conditionAddElse": "Adicionar condição senão se",
+        "conditionRemove": "Remover condição",
+        "conditionElseHint": "Quando nenhuma condição corresponder, a coluna SENÃO é executada.",
+        "operatorLabel": "Correspondência",
+        "operatorContains": "Contém",
+        "operatorWord": "Palavra inteira",
+        "operatorExact": "Texto exato",
+        "placeholderValueMessage": "ex.: Explicar mais",
         "closeConversationHint": "Define o status da conversa como \"fechada\". Nenhuma configuração necessária."
       }
     }

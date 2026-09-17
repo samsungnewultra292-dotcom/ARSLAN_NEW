@@ -3,6 +3,7 @@ import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
+  engineSendMedia,
 } from '@/lib/flows/meta-send'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
@@ -254,3 +255,9 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
 
   return { whatsapp_message_id: waMessageId }
 }
+
+// Re-exported so the automation engine can send media (image/video) with
+// the same account-scoped lookup + phone-variant retry + messages insert
+// as the other bot senders. Defined in the flows module — both engines
+// want identical media behaviour.
+export { engineSendMedia }

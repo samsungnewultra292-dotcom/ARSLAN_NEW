@@ -3,18 +3,18 @@ import { supabaseAdmin } from './admin-client'
 // ------------------------------------------------------------
 // Builder payload → flat rows for automation_steps.
 // Root steps arrive in order. A Condition step carries its children
-// under `branches: { yes: [...], no: [...] }`. We walk the tree and
-// assign stable UUIDs so parent_step_id references resolve in a
-// single INSERT.
+// under branch buckets keyed `yes` (IF), `b1`, `b2`, … (ELSE-IF) and
+// `no` (ELSE/OTHER). We walk the tree and assign stable UUIDs so
+// parent_step_id references resolve in a single INSERT.
 // ------------------------------------------------------------
 
 export interface BuilderStepInput {
   id?: string
   step_type: string
   step_config: Record<string, unknown>
-  branches?: { yes?: BuilderStepInput[]; no?: BuilderStepInput[] }
+  branches?: Record<string, BuilderStepInput[]>
   // Legacy flat form (from template seeds):
-  branch?: 'yes' | 'no' | null
+  branch?: string | null
   parent_index?: number | null
 }
 
@@ -22,7 +22,7 @@ interface InsertRow {
   id: string
   automation_id: string
   parent_step_id: string | null
-  branch: 'yes' | 'no' | null
+  branch: string | null
   step_type: string
   step_config: Record<string, unknown>
   position: number
@@ -61,7 +61,7 @@ export async function insertSteps(
   function walk(
     steps: BuilderStepInput[],
     parentId: string | null,
-    branch: 'yes' | 'no' | null,
+    branch: string | null,
   ) {
     steps.forEach((s, idx) => {
       const id = s.id ?? uid()
@@ -75,8 +75,9 @@ export async function insertSteps(
         position: idx,
       })
       if (s.step_type === 'condition' && s.branches) {
-        if (s.branches.yes) walk(s.branches.yes, id, 'yes')
-        if (s.branches.no) walk(s.branches.no, id, 'no')
+        for (const [key, kids] of Object.entries(s.branches)) {
+          if (Array.isArray(kids)) walk(kids, id, key)
+        }
       }
     })
   }
@@ -90,7 +91,7 @@ export async function insertSteps(
 function seedsToTree(seeds: BuilderStepInput[]): BuilderStepInput[] {
   const nodes: BuilderStepInput[] = seeds.map((s) => ({
     ...s,
-    branches: { yes: [], no: [] },
+    branches: {},
   }))
   const roots: BuilderStepInput[] = []
   nodes.forEach((n, i) => {
@@ -99,8 +100,8 @@ function seedsToTree(seeds: BuilderStepInput[]): BuilderStepInput[] {
       roots.push(n)
     } else {
       const parent = nodes[seed.parent_index]
-      parent.branches = parent.branches ?? { yes: [], no: [] }
-      const bucket = (seed.branch ?? 'yes') as 'yes' | 'no'
+      parent.branches = parent.branches ?? {}
+      const bucket = seed.branch ?? 'yes'
       ;(parent.branches[bucket] ??= []).push(n)
     }
   })
@@ -113,13 +114,13 @@ function seedsToTree(seeds: BuilderStepInput[]): BuilderStepInput[] {
  */
 export interface BuilderStepNode extends BuilderStepInput {
   id: string
-  branches: { yes: BuilderStepNode[]; no: BuilderStepNode[] }
+  branches: Record<string, BuilderStepNode[]>
 }
 
 interface DbStep {
   id: string
   parent_step_id: string | null
-  branch: 'yes' | 'no' | null
+  branch: string | null
   step_type: string
   step_config: Record<string, unknown>
   position: number
@@ -141,7 +142,7 @@ export async function loadStepsTree(automationId: string): Promise<BuilderStepNo
       id: row.id,
       step_type: row.step_type,
       step_config: row.step_config ?? {},
-      branches: { yes: [], no: [] },
+      branches: {},
     })
   }
 
@@ -151,7 +152,8 @@ export async function loadStepsTree(automationId: string): Promise<BuilderStepNo
     if (row.parent_step_id) {
       const parent = byId.get(row.parent_step_id)
       if (parent) {
-        const bucket = (row.branch ?? 'yes') as 'yes' | 'no'
+        const bucket = row.branch ?? 'yes'
+        parent.branches[bucket] ??= []
         parent.branches[bucket].push(node)
       }
     } else {

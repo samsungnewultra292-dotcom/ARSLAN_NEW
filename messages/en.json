@@ -1011,7 +1011,11 @@
       },
       "branches": {
         "yes": "Yes",
-        "no": "No"
+        "no": "No",
+        "if": "IF",
+        "elseIf": "ELSE IF",
+        "else": "ELSE",
+        "otherHint": "Runs when nothing above matched"
       },
       "addStep": "Add step",
       "moveUp": "Move up",
@@ -1037,6 +1041,7 @@
         "amountLabel": "Amount",
         "unitLabel": "Unit",
         "units": {
+          "seconds": "Seconds",
           "minutes": "Minutes",
           "hours": "Hours",
           "days": "Days"
@@ -1062,6 +1067,35 @@
         "matchWord": "Whole word",
         "matchWordHint": "Matches the keyword only as a standalone word, so \"k\" no longer fires on \"thanks\". Best for short keywords in space-separated languages; use Contains for languages written without spaces.",
         "matchExact": "Exact",
+        "mediaLabel": "Media (optional)",
+        "mediaImage": "Image",
+        "mediaVideo": "Video",
+        "mediaFile": "Uploaded file",
+        "mediaChange": "Change",
+        "mediaRemove": "Remove",
+        "mediaUploaded": "Media uploaded",
+        "mediaUploadFailed": "Upload failed",
+        "mediaTooLarge": "File is {size} MB — the limit for this type is {limit} MB.",
+        "buttonsLabel": "Buttons (optional)",
+        "buttonsEmpty": "No buttons yet — add a quick reply or a URL button.",
+        "buttonQuickReply": "Quick reply",
+        "buttonUrl": "URL button",
+        "buttonTitleLabel": "Label",
+        "buttonValueLabel": "Value sent",
+        "buttonValueHint": "What the customer's reply carries. Defaults to the label.",
+        "buttonUrlLabel": "Link URL",
+        "addButton": "Add button",
+        "addQuickReply": "Quick reply",
+        "addUrlButton": "URL button",
+        "quickReplyLimit": "WhatsApp allows at most 3 quick replies per message.",
+        "conditionAddElse": "Add else-if condition",
+        "conditionRemove": "Remove condition",
+        "conditionElseHint": "When no condition matches, the ELSE column runs.",
+        "operatorLabel": "Match",
+        "operatorContains": "Contains",
+        "operatorWord": "Whole word",
+        "operatorExact": "Exact text",
+        "placeholderValueMessage": "e.g. Explain More",
         "closeConversationHint": "Sets the conversation status to \"closed\". No configuration needed."
       }
     }
