@@ -27,10 +27,24 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Shield,
+  ShieldBan,
+  ShieldCheck,
+  Ban,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
+import { useCan } from "@/hooks/use-can";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,6 +68,7 @@ import { AiThreadBanner } from "./ai-thread-banner";
 import { buildReplyPreview } from "./reply-quote";
 import { renderTemplateBody } from "@/lib/whatsapp/template-body";
 import { contactHandle } from "@/lib/whatsapp/wa-identity";
+import { normalizePhone } from "@/lib/whatsapp/phone-utils";
 import { toast } from "sonner";
 
 interface ReplyDraft {
@@ -176,6 +191,15 @@ export function MessageThread({
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
+  // Blocklist state for the contact in this thread. The blocklist API
+  // keys on the normalized phone, so BSUID-only contacts (no phone)
+  // disable the control rather than guessing. The toggle is confirm-
+  // dialog-gated (`blockTarget`), mutations go through
+  // `/api/whatsapp/blocked-numbers`.
+  const [blocked, setBlocked] = useState(false);
+  const [blockTarget, setBlockTarget] = useState<"block" | "unblock" | null>(null);
+  const [blockSubmitting, setBlockSubmitting] = useState(false);
+  const canBlockContact = useCan("send-messages");
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
   // parent's resyncToken); the 700ms spin is just feedback so the click
@@ -231,6 +255,68 @@ export function MessageThread({
       cancelled = true;
     };
   }, []);
+
+  // Blocklist status for the current contact. Refetches whenever the
+  // selected contact changes. Contacts without a phone (BSUID-only)
+  // can't be blocked — the API keys on the normalized phone, so we skip
+  // the fetch and treat them as unblocked.
+  const contactPhoneForBlock = contact?.phone ? normalizePhone(contact.phone) : "";
+  useEffect(() => {
+    if (!contactPhoneForBlock) {
+      setBlocked(false);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/whatsapp/blocked-numbers", {
+      headers: { "Content-Type": "application/json" },
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((json: { blocked_numbers?: { phone_normalized: string }[] }) => {
+        if (cancelled) return;
+        setBlocked(
+          (json.blocked_numbers ?? []).some(
+            (b) => b.phone_normalized === contactPhoneForBlock
+          )
+        );
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch block status:", err);
+        if (!cancelled) setBlocked(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [contactPhoneForBlock]);
+
+  // Block/unblock the contact. Driven by the confirm dialog
+  // (`blockTarget`), mutates through the blocklist API.
+  const handleBlockUnblock = useCallback(async () => {
+    if (!blockTarget || !contactPhoneForBlock) return;
+    const isBlock = blockTarget === "block";
+    setBlockSubmitting(true);
+    try {
+      const res = await fetch("/api/whatsapp/blocked-numbers", {
+        method: isBlock ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          isBlock
+            ? { phone: contact?.phone ?? "" }
+            : { phone_normalized: contactPhoneForBlock }
+        ),
+      });
+      const json = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok || !json) {
+        throw new Error(json?.error ?? "Failed to update block status");
+      }
+      setBlocked(isBlock);
+      setBlockTarget(null);
+      toast.success(isBlock ? t("blocked") : t("unblocked"));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("blockFailed"));
+    } finally {
+      setBlockSubmitting(false);
+    }
+  }, [blockTarget, contactPhoneForBlock, contact?.phone, t]);
 
   // 24-hour session timer
   const sessionInfo = useMemo(() => {
@@ -571,7 +657,10 @@ export function MessageThread({
           onUpdateMessage(tempId, { status: "failed" });
           // The upload never reached the recipient — GC the orphaned
           // object rather than leaving it in the public bucket forever.
-          void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+          // A stored quick-reply video has no fresh path to GC.
+          if (payload.path) {
+            void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+          }
           return;
         }
 
@@ -581,7 +670,9 @@ export function MessageThread({
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(t("sendFailed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
-        void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+        if (payload.path) {
+          void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+        }
       }
     },
     [conversation, onNewMessage, onUpdateMessage, t],
@@ -991,6 +1082,53 @@ export function MessageThread({
             </button>
           )}
 
+          {/* Block/unblock dropdown — CRM-level blocklist (migration 045).
+              Agent+ only; disabled for phone-less (BSUID-only) contacts
+              since the blocklist keys on the normalized phone. Blocking is
+              idempotent; the menu shows the current state and the confirm
+              dialog lives at the bottom of this component. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={!canBlockContact || !contactPhoneForBlock}
+              className={cn(
+                "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                blocked
+                  ? "text-destructive"
+                  : "text-muted-foreground disabled:opacity-50"
+              )}
+              aria-label={blocked ? t("unblock") : t("block")}
+            >
+              {blocked ? (
+                <ShieldBan className="h-3 w-3" />
+              ) : (
+                <Shield className="h-3 w-3" />
+              )}
+              <span className="hidden sm:inline">
+                {blocked ? t("unblock") : t("block")}
+              </span>
+              <ChevronDown className="h-3 w-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="border-border bg-popover"
+            >
+              <DropdownMenuItem
+                variant={blocked ? "default" : "destructive"}
+                onClick={() =>
+                  setBlockTarget(blocked ? "unblock" : "block")
+                }
+                className="text-sm"
+              >
+                {blocked ? (
+                  <ShieldCheck className="h-3 w-3" />
+                ) : (
+                  <Ban className="h-3 w-3" />
+                )}
+                {blocked ? t("unblockContact") : t("blockContact")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           {/* Status dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger className={cn(
@@ -1202,6 +1340,47 @@ export function MessageThread({
         onActiveIdChange={handleMediaChange}
         contactLabel={contactDisplayName}
       />
+
+      {/* Confirm dialog for block/unblock. Gated on an explicit
+          `blockTarget` so selecting the menu item never fires the
+          mutation on its own. */}
+      <Dialog
+        open={blockTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !blockSubmitting) setBlockTarget(null);
+        }}
+      >
+        <DialogContent className="border-border bg-popover sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">
+              {blockTarget === "unblock"
+                ? t("unblockConfirmTitle")
+                : t("blockConfirmTitle")}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {blockTarget === "unblock"
+                ? t("unblockConfirmDesc", { phone: contactDisplayName })
+                : t("blockConfirmDesc", { phone: contactDisplayName })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="border-border bg-popover">
+            <Button
+              variant="outline"
+              onClick={() => setBlockTarget(null)}
+              disabled={blockSubmitting}
+            >
+              {t("cancel")}
+            </Button>
+            <Button
+              variant={blockTarget === "unblock" ? "secondary" : "destructive"}
+              onClick={() => void handleBlockUnblock()}
+              disabled={blockSubmitting}
+            >
+              {blockTarget === "unblock" ? t("unblock") : t("block")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

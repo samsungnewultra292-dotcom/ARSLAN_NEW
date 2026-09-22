@@ -73,8 +73,11 @@ export interface SendMediaPayload {
   kind: ComposerMediaKind;
   /** Public chat-media URL Meta fetches at send time. */
   mediaUrl: string;
-  /** Storage object path — lets the caller GC the object if the send fails. */
-  path: string;
+  /**
+   * Storage object path — lets the caller GC the object if the send fails.
+   * Optional: a stored quick-reply video has no fresh upload to GC.
+   */
+  path?: string;
   /** Optional caption (image/video/document only). */
   caption?: string;
   /** Original file name — surfaced to the recipient for documents. */
@@ -355,12 +358,22 @@ export function MessageComposer({
   }, [interactivePayload, t]);
 
   // A picked quick reply: text fills the composer; interactive opens the
-  // builder pre-filled so the agent can tweak before sending.
+  // builder pre-filled so the agent can tweak before sending. A video
+  // reply sends immediately — its media is already a stored chat-media
+  // URL, so there's nothing to stage.
   const handlePickQuickReply = useCallback(
     (qr: QuickReply) => {
       setQuickReplyOpen(false);
       if (qr.kind === "interactive" && qr.interactive_payload) {
         openInteractiveBuilder(qr.interactive_payload);
+        return;
+      }
+      if (qr.kind === "video" && qr.media_url) {
+        onSendMedia({
+          kind: "video",
+          mediaUrl: qr.media_url,
+          caption: qr.content_text?.trim() || undefined,
+        });
         return;
       }
       const body = qr.content_text ?? "";
@@ -378,7 +391,7 @@ export function MessageComposer({
         }
       });
     },
-    [openInteractiveBuilder, adjustHeight],
+    [openInteractiveBuilder, adjustHeight, onSendMedia],
   );
 
   // Upload a captured file to chat-media and stage it as a draft.

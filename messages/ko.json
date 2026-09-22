@@ -181,7 +181,19 @@
       "sendTemplateFailed": "템플릿 전송 실패: {reason}",
       "waitForSending": "메시지 전송이 끝날 때까지 기다려 주세요",
       "reactionFailed": "반응 추가 실패: {reason}",
-      "assignmentUpdateFailed": "담당자 변경에 실패했습니다"
+      "assignmentUpdateFailed": "담당자 변경에 실패했습니다",
+      "block": "차단",
+      "unblock": "차단 해제",
+      "blockContact": "연락처 차단",
+      "unblockContact": "연락처 차단 해제",
+      "blocked": "차단됨",
+      "unblocked": "차단 해제됨",
+      "blockFailed": "차단 상태 업데이트에 실패했습니다",
+      "blockConfirmTitle": "이 연락처를 차단할까요?",
+      "blockConfirmDesc": "{phone}의 메시지가 자동으로 차단됩니다. 언제든 차단을 해제할 수 있습니다.",
+      "unblockConfirmTitle": "이 연락처의 차단을 해제할까요?",
+      "unblockConfirmDesc": "{phone}의 메시지가 다시 전달됩니다.",
+      "cancel": "취소"
     },
     "sessionTimer": {
       "expired": "만료됨",
@@ -1685,7 +1697,10 @@
       "phoneNumberIdNotNumeric": "전화번호 ID는 숫자만 포함해야 합니다. 전화번호가 아닌, Meta → WhatsApp → API 설정에 표시된 숫자 ID를 복사하세요.",
       "wabaIdNotNumeric": "WhatsApp 비즈니스 계정 ID는 숫자만 포함해야 합니다. Meta → WhatsApp → API 설정에서 복사하세요.",
       "wabaSubscribed": "WhatsApp 비즈니스 계정이 이 앱에 구독되어 있어 수신 웹훅을 받을 수 있습니다.",
-      "wabaNotSubscribed": "WhatsApp 비즈니스 계정이 이 앱에 구독되어 있지 않아 Meta가 수신 웹훅을 전달하지 않습니다. 액세스 토큰을 다시 입력하고 저장해 구독하세요."
+      "wabaNotSubscribed": "WhatsApp 비즈니스 계정이 이 앱에 구독되어 있지 않아 Meta가 수신 웹훅을 전달하지 않습니다. 액세스 토큰을 다시 입력하고 저장해 구독하세요.",
+      "businessProfileTitle": "비즈니스 프로필",
+      "businessProfileDesc": "이 WABA에 대해 Meta가 제공하는 공개 비즈니스 프로필입니다.",
+      "businessNameUnknown": "이름 없는 비즈니스"
     },
     "sections": {
       "overview": "개요",
@@ -2046,6 +2061,12 @@
     "idPlaceholder": "id",
     "buttonLabelPlaceholder": "버튼 라벨",
     "addButton": "버튼 추가",
+    "urlButtons": "URL 버튼",
+    "urlButtonsCount": "URL 버튼 ({count}/{max})",
+    "urlButtonsHint": "메시지 본문에 추가되는 탭 가능한 링크로 표시됩니다.",
+    "urlLabelPlaceholder": "버튼 라벨",
+    "urlPlaceholder": "https://example.com",
+    "addUrlButton": "URL 버튼 추가",
     "listButtonLabel": "목록 버튼 라벨",
     "rowsCount": "행 ({count}/{max})",
     "sectionTitlePlaceholder": "섹션 제목 (선택)",

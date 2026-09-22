@@ -13,6 +13,7 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
+import { isPhoneBlocked } from '@/lib/whatsapp/blocklist'
 import { resolveContactSendTarget } from '@/lib/whatsapp/wa-identity'
 import { supabaseAdmin } from './admin-client'
 
@@ -109,6 +110,11 @@ export async function engineSendText(
     )
   }
   const sanitized = sendTarget.target
+
+  // CRM blocklist — the Flows engine must never message a blocked number.
+  if (sendTarget.isPhone && (await isPhoneBlocked(db, args.accountId, sanitized))) {
+    throw new Error(`contact phone ${sanitized} is blocked`)
+  }
 
   const { phoneNumberId, accessToken } = await loadAccountMetaCredentials(
     db,
@@ -218,6 +224,11 @@ export async function engineSendMedia(
     )
   }
   const sanitized = sendTarget.target
+
+  // CRM blocklist — the Flows engine must never message a blocked number.
+  if (sendTarget.isPhone && (await isPhoneBlocked(db, args.accountId, sanitized))) {
+    throw new Error(`contact phone ${sanitized} is blocked`)
+  }
 
   const { phoneNumberId, accessToken } = await loadAccountMetaCredentials(
     db,
@@ -369,6 +380,12 @@ async function sendInteractiveViaMeta(
     )
   }
   const sanitized = sendTarget.target
+
+  // CRM blocklist — an automation-sent interactive message must never
+  // reach a blocked number.
+  if (sendTarget.isPhone && (await isPhoneBlocked(db, input.accountId, sanitized))) {
+    throw new Error(`contact phone ${sanitized} is blocked`)
+  }
 
   const { phoneNumberId, accessToken } = await loadAccountMetaCredentials(
     db,

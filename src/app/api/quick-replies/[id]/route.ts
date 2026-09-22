@@ -30,12 +30,20 @@ export async function PATCH(
     update.title = title
   }
 
-  // When `kind` is supplied (e.g. the editor flips Text ↔ Interactive), it
-  // drives which content column is authoritative and the other is cleared —
-  // otherwise a switched row keeps a stale payload the picker mis-routes on.
+  // When `kind` is supplied (e.g. the editor flips Text ↔ Interactive ↔
+  // Video), it drives which content column is authoritative and the
+  // others are cleared — otherwise a switched row keeps a stale payload
+  // the picker mis-routes on.
   if ('kind' in body) {
-    if (body.kind !== 'text' && body.kind !== 'interactive') {
-      return NextResponse.json({ error: 'kind must be "text" or "interactive"' }, { status: 400 })
+    if (
+      body.kind !== 'text' &&
+      body.kind !== 'interactive' &&
+      body.kind !== 'video'
+    ) {
+      return NextResponse.json(
+        { error: 'kind must be "text", "interactive" or "video"' },
+        { status: 400 },
+      )
     }
     update.kind = body.kind
     if (body.kind === 'interactive') {
@@ -43,6 +51,27 @@ export async function PATCH(
       if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 })
       update.interactive_payload = body.interactive_payload
       update.content_text = null
+      update.media_url = null
+      update.media_name = null
+      update.media_type = null
+      update.media_path = null
+    } else if (body.kind === 'video') {
+      const url = typeof body.media_url === 'string' ? body.media_url.trim() : ''
+      if (!url) {
+        return NextResponse.json(
+          { error: 'media_url is required for video quick replies' },
+          { status: 400 },
+        )
+      }
+      update.media_url = url
+      update.media_name =
+        typeof body.media_name === 'string' ? body.media_name.trim() : ''
+      update.media_type =
+        typeof body.media_type === 'string' ? body.media_type.trim() : ''
+      update.media_path =
+        typeof body.media_path === 'string' ? body.media_path.trim() : ''
+      update.content_text = null
+      update.interactive_payload = null
     } else {
       const text = typeof body.content_text === 'string' ? body.content_text : ''
       if (!text.trim()) {
@@ -53,6 +82,10 @@ export async function PATCH(
       }
       update.content_text = text
       update.interactive_payload = null
+      update.media_url = null
+      update.media_name = null
+      update.media_type = null
+      update.media_path = null
     }
   } else {
     // No kind change — allow partial edits of whichever field the row uses.
@@ -66,6 +99,10 @@ export async function PATCH(
       }
       update.interactive_payload = body.interactive_payload ?? null
     }
+    if ('media_url' in body) update.media_url = body.media_url ?? null
+    if ('media_name' in body) update.media_name = body.media_name ?? null
+    if ('media_type' in body) update.media_type = body.media_type ?? null
+    if ('media_path' in body) update.media_path = body.media_path ?? null
   }
 
   if (Object.keys(update).length === 0) {

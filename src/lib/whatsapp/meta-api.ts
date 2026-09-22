@@ -133,6 +133,31 @@ export async function verifyPhoneNumber(
   return response.json()
 }
 
+export interface WabaBusinessProfileArgs {
+  wabaId: string
+  accessToken: string
+}
+
+/**
+ * Display-only snapshot of the connected WABA's business profile
+ * (name + profile picture URL). Read-only — nothing here reconfigures
+ * or reconnects the account. The profile fields are returned by Meta's
+ * GET /{waba_id}; we only float back what the settings card shows.
+ */
+export async function getWabaBusinessProfile(
+  args: WabaBusinessProfileArgs
+): Promise<{ id: string; name?: string; profile_picture_url?: string }> {
+  const { wabaId, accessToken } = args
+  const url = `${META_API_BASE}/${wabaId}?fields=id,name,profile_picture_url`
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  return response.json()
+}
+
 // ============================================================
 // Cloud API registration (subscription for inbound webhooks)
 // ============================================================

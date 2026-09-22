@@ -30,6 +30,20 @@ export interface InteractiveButton {
   title: string
 }
 
+/**
+ * A link (URL) button. Meta's Cloud API has no URL-button type on
+ * interactive messages, so these are rendered as clickable link lines
+ * appended to the outgoing body text (see `interactiveBodyWithUrlButtons`).
+ */
+export interface InteractiveUrlButton {
+  /** Unique within the payload. */
+  id: string
+  /** Visible label (≤ 20 chars). */
+  title: string
+  /** Must be a valid http(s) URL. */
+  url: string
+}
+
 export interface InteractiveButtonsPayload {
   kind: 'buttons'
   /** Body text shown above the buttons (≤ 1024 chars). */
@@ -40,6 +54,11 @@ export interface InteractiveButtonsPayload {
   footer?: string
   /** 1–3 buttons. */
   buttons: InteractiveButton[]
+  /**
+   * Optional link buttons (0–3). Serially rendered as `title — url`
+   * lines under the body on send; Meta never sees them as buttons.
+   */
+  url_buttons?: InteractiveUrlButton[]
 }
 
 export interface InteractiveListRow {
@@ -100,6 +119,18 @@ function validateHeaderFooter(
   return ok()
 }
 
+function isHttpUrl(v: unknown): boolean {
+  if (typeof v !== 'string' || v.trim() === '') return false
+  try {
+    const u = new URL(v.trim())
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+const MAX_URL_BUTTONS = 3
+
 /**
  * Validate an interactive payload against Meta's hard limits + our
  * structural rules (non-empty ids/titles, unique ids). Returns a result
@@ -153,6 +184,46 @@ export function validateInteractivePayload(
       if (b.title.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
         return fail(
           `Button label "${b.title}" exceeds the ${INTERACTIVE_LIMITS.buttonTitleMaxLength}-character limit.`,
+        )
+      }
+    }
+
+    // URL buttons: 0–3, unique ids, ≤ 20-char labels, http(s) URLs, and
+    // the combined body + rendered link lines must fit Meta's body cap
+    // (they share the message body field on the wire).
+    const urlButtons = (p as InteractiveButtonsPayload).url_buttons
+    if (urlButtons !== undefined && urlButtons !== null) {
+      if (!Array.isArray(urlButtons)) {
+        return fail('URL buttons must be a list.')
+      }
+      if (urlButtons.length > MAX_URL_BUTTONS) {
+        return fail(`A message allows at most ${MAX_URL_BUTTONS} URL buttons.`)
+      }
+      const urlSeen = new Set<string>()
+      for (const ub of urlButtons) {
+        if (!ub || typeof ub.id !== 'string' || ub.id.trim() === '') {
+          return fail('Every URL button needs an id.')
+        }
+        if (urlSeen.has(ub.id)) {
+          return fail(`Duplicate URL button id "${ub.id}".`)
+        }
+        urlSeen.add(ub.id)
+        if (typeof ub.title !== 'string' || ub.title.trim() === '') {
+          return fail('Every URL button needs a label.')
+        }
+        if (ub.title.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+          return fail(
+            `URL button label "${ub.title}" exceeds the ${INTERACTIVE_LIMITS.buttonTitleMaxLength}-character limit.`,
+          )
+        }
+        if (!isHttpUrl(ub.url)) {
+          return fail(`URL button "${ub.title}" needs a valid http(s) link.`)
+        }
+      }
+      const combined = interactiveBodyWithUrlButtons(p as InteractiveButtonsPayload)
+      if (combined.length > INTERACTIVE_LIMITS.bodyMaxLength) {
+        return fail(
+          `Body plus URL button links exceeds the ${INTERACTIVE_LIMITS.bodyMaxLength}-character limit.`,
         )
       }
     }
@@ -236,4 +307,24 @@ export function interactivePayloadPreviewText(
   const body = payload.body?.trim()
   if (body) return body
   return payload.kind === 'buttons' ? '[buttons]' : '[list]'
+}
+
+/**
+ * Render a buttons payload's body the way it actually ships on the wire:
+ * the plain body plus one `Label — url` line per URL button (Meta has no
+ * native URL-button type on interactive messages, so the links are
+ * carried in the body text). Used by the validator for the shared
+ * 1024-char cap and by the send path to build the bodyText argument.
+ */
+export function interactiveBodyWithUrlButtons(
+  payload: InteractiveButtonsPayload,
+): string {
+  const links = (payload.url_buttons ?? []).map(
+    (b) => `${b.title.trim()} — ${b.url.trim()}`,
+  )
+  if (links.length === 0) return payload.body
+  const body = payload.body?.trim() ? payload.body : ''
+  return links.length === 0
+    ? body
+    : [body, ...links].filter(Boolean).join('\n')
 }

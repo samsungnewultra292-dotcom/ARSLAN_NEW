@@ -15,6 +15,7 @@ import {
   type InteractiveButtonsPayload,
   type InteractiveListPayload,
   type InteractiveMessagePayload,
+  type InteractiveUrlButton,
 } from "@/lib/whatsapp/interactive";
 import { InteractivePreview } from "./interactive-preview";
 
@@ -223,6 +224,32 @@ function ButtonsEditor({
   const remove = (idx: number) =>
     onChange({ ...value, buttons: buttons.filter((_, i) => i !== idx) });
 
+  // URL buttons ship as `Label — url` lines appended to the body on send
+  // (Meta has no interactive URL-button type), so they get their own
+  // editor block + the same 3-button ceiling.
+  const urlButtons = value.url_buttons ?? [];
+  const updateUrl = (
+    idx: number,
+    patch: Partial<InteractiveUrlButton>,
+  ) =>
+    onChange({
+      ...value,
+      url_buttons: urlButtons.map((b, i) => (i === idx ? { ...b, ...patch } : b)),
+    });
+  const addUrl = () =>
+    onChange({
+      ...value,
+      url_buttons: [
+        ...urlButtons,
+        { id: nextId(urlButtons.map((b) => b.id), "url_"), title: "", url: "" },
+      ],
+    });
+  const removeUrl = (idx: number) =>
+    onChange({
+      ...value,
+      url_buttons: urlButtons.filter((_, i) => i !== idx),
+    });
+
   return (
     <div>
       <label className="mb-2 block text-xs text-muted-foreground">
@@ -271,6 +298,62 @@ function ButtonsEditor({
           {t("addButton")}
         </Button>
       )}
+
+      <div className="mt-4">
+        <label className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+          <span>{t("urlButtons")}</span>
+          <span className="text-[10px]">
+            {t("urlButtonsCount", { count: urlButtons.length, max: 3 })}
+          </span>
+        </label>
+        <p className="mb-2 text-[10px] text-muted-foreground">{t("urlButtonsHint")}</p>
+        <div className="flex flex-col gap-2">
+          {urlButtons.map((b, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 rounded-md border border-border bg-muted/40 p-2"
+            >
+              {advanced && (
+                <Input
+                  value={b.id}
+                  onChange={(e) =>
+                    updateUrl(i, { id: slugify(e.target.value, `url_${i + 1}`) })
+                  }
+                  placeholder={t("idPlaceholder")}
+                  className="w-28 bg-muted font-mono text-xs"
+                />
+              )}
+              <Input
+                value={b.title}
+                maxLength={INTERACTIVE_LIMITS.buttonTitleMaxLength}
+                onChange={(e) => updateUrl(i, { title: e.target.value })}
+                placeholder={t("urlLabelPlaceholder")}
+                className="w-40 bg-muted"
+              />
+              <Input
+                value={b.url}
+                onChange={(e) => updateUrl(i, { url: e.target.value })}
+                placeholder={t("urlPlaceholder")}
+                className="flex-1 bg-muted"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => removeUrl(i)}
+                className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+        {urlButtons.length < 3 && (
+          <Button variant="ghost" size="sm" onClick={addUrl} className="mt-2">
+            <Plus className="h-3.5 w-3.5" />
+            {t("addUrlButton")}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

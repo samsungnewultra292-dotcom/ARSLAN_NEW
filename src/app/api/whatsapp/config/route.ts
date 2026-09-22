@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import {
   getSubscribedApps,
+  getWabaBusinessProfile,
   listWabaPhoneNumbers,
   registerPhoneNumber,
   subscribeWabaToApp,
@@ -219,10 +220,34 @@ export async function GET() {
       }
     }
 
+    // Display-only business profile for the connected WABA (Settings →
+    // WhatsApp shows it as an identity card). Read-only: never
+    // reconfigures or reconnects anything, so any failure is non-fatal.
+    let businessProfile: {
+      checked: boolean
+      profile?: { id: string; name?: string; profile_picture_url?: string }
+      error?: string
+    } = { checked: false }
+    if (config.waba_id) {
+      try {
+        const profile = await getWabaBusinessProfile({
+          wabaId: config.waba_id,
+          accessToken,
+        })
+        businessProfile = { checked: true, profile }
+      } catch (err) {
+        const explained = explainMetaError(err, 'business_profile', {
+          wabaId: config.waba_id,
+        })
+        businessProfile = { checked: true, error: explained.summary }
+      }
+    }
+
     return NextResponse.json({
       connected: true,
       phone_info: phoneInfo,
       waba_subscription: wabaSubscription,
+      business_profile: businessProfile,
     })
   } catch (error) {
     console.error('Error in WhatsApp config GET:', error)

@@ -35,13 +35,18 @@ export async function POST(request: Request) {
   if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
 
   const title = typeof body.title === 'string' ? body.title.trim() : ''
-  const kind = body.kind === 'interactive' ? 'interactive' : 'text'
+  const kind =
+    body.kind === 'interactive' ? 'interactive' : body.kind === 'video' ? 'video' : 'text'
   if (!title) {
     return NextResponse.json({ error: 'title is required' }, { status: 400 })
   }
 
   let content_text: string | null = null
   let interactive_payload: unknown = null
+  let media_url: string | null = null
+  let media_name: string | null = null
+  let media_type: string | null = null
+  let media_path: string | null = null
 
   if (kind === 'interactive') {
     const result = validateInteractivePayload(body.interactive_payload)
@@ -49,6 +54,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: result.error }, { status: 400 })
     }
     interactive_payload = body.interactive_payload
+  } else if (kind === 'video') {
+    media_url = typeof body.media_url === 'string' ? body.media_url.trim() : ''
+    media_name = typeof body.media_name === 'string' ? body.media_name.trim() : ''
+    media_type = typeof body.media_type === 'string' ? body.media_type.trim() : ''
+    media_path = typeof body.media_path === 'string' ? body.media_path.trim() : ''
+    if (!media_url) {
+      return NextResponse.json(
+        { error: 'media_url is required for video quick replies' },
+        { status: 400 },
+      )
+    }
   } else {
     const text = typeof body.content_text === 'string' ? body.content_text : ''
     if (!text.trim()) {
@@ -69,6 +85,10 @@ export async function POST(request: Request) {
       kind,
       content_text,
       interactive_payload,
+      media_url,
+      media_name,
+      media_type,
+      media_path,
     })
     .select()
     .single()

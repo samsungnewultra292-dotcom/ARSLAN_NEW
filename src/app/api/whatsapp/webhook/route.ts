@@ -4,6 +4,7 @@ import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { mirrorInboundMedia } from '@/lib/whatsapp/mirror-inbound-media'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
+import { isPhoneBlocked } from '@/lib/whatsapp/blocklist'
 import {
   hasUsableIdentity,
   identityDisplayName,
@@ -680,6 +681,22 @@ async function processMessage(
     return
   }
 
+  // CRM blocklist (migration 045) — a blocked number is dropped BEFORE
+  // any contact / conversation row is created, so their messages never
+  // surface in the inbox and no automation / flow / AI / webhook firing
+  // happens on their behalf. BSUID-only senders have no phone, so they
+  // can't match a phone-keyed blocklist (accepted edge case).
+  if (
+    identity.phone &&
+    (await isPhoneBlocked(supabaseAdmin(), accountId, identity.phone))
+  ) {
+    console.warn(
+      `[webhook] inbound message from blocked number dropped:`,
+      message.id
+    )
+    return
+  }
+
   // Find or create contact
   const contactOutcome = await findOrCreateContact(
     accountId,
@@ -1250,8 +1267,26 @@ function contactIdentityPatch(
   // for a brand-new row but would clobber an agent's hand-edited name
   // on every inbound message from a contact with no WhatsApp profile
   // name.
+  //
+  // Fill only blank names. A contact's `name` is editable in the CRM
+  // and may have been set by an agent/import to a value different from
+  // the WhatsApp profile — overwriting it on every inbound message
+  // loses that work. Meta's live profile name is still stamped on the
+  // row at creation; only contacts with no name at all get it backfilled.
+  //
+  // Also replace a *fallback* name — rows created before Meta sent a
+  // profile name get the phone number / BSUID / @username as their
+  // `name` (see `identityDisplayName`'s fallback chain). That's a
+  // placeholder, not an agent edit: the moment Meta supplies a real
+  // label, adopting it only ever replaces machine-generated text.
   const name = identity.name || identity.waUsername
-  if (name && name !== existing.name) patch.name = name
+  const existingName = existing.name?.trim()
+  const isFallbackName =
+    existingName != null &&
+    (existingName === normalizePhone(existing.phone ?? '') ||
+      (!!existing.wa_user_id && existingName === existing.wa_user_id) ||
+      (!!existing.wa_username && existingName === `@${existing.wa_username}`))
+  if (name && (!existingName || isFallbackName)) patch.name = name
 
   if (identity.waUserId && identity.waUserId !== existing.wa_user_id) {
     patch.wa_user_id = identity.waUserId

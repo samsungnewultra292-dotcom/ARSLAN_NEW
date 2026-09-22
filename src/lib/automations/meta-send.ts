@@ -11,6 +11,7 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
 import { resolveContactSendTarget } from '@/lib/whatsapp/wa-identity'
+import { isPhoneBlocked } from '@/lib/whatsapp/blocklist'
 import {
   resolveTemplateRow,
   templateContentText,
@@ -139,6 +140,11 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     )
   }
   const sanitized = sendTarget.target
+
+  // CRM blocklist — automations must never message a blocked number.
+  if (sendTarget.isPhone && (await isPhoneBlocked(db, input.accountId, sanitized))) {
+    throw new Error(`contact phone ${sanitized} is blocked`)
+  }
 
   const { data: config, error: configErr } = await db
     .from('whatsapp_config')

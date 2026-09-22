@@ -30,6 +30,7 @@ import { resolveTemplateRow } from '@/lib/whatsapp/template-body';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
 import { awaitSuperSafeToken } from '@/lib/whatsapp/super-safe-rate-limit';
+import { isPhoneBlocked } from '@/lib/whatsapp/blocklist';
 import {
   DEFAULT_BROADCAST_SENDING_MODE,
   isBroadcastSendingMode,
@@ -291,6 +292,19 @@ export async function deliverBroadcast(
   for (const recipient of plan.planned) {
     if (superSafe) {
       await awaitSuperSafeToken(plan.accountId);
+    }
+
+    // CRM blocklist (migration 045) — skip blocked recipients, marking
+    // their row failed so the campaign aggregate reflects the decision.
+    if (await isPhoneBlocked(db, plan.accountId, recipient.phone)) {
+      await db
+        .from('broadcast_recipients')
+        .update({
+          status: 'failed',
+          error_message: 'Recipient is blocked',
+        })
+        .eq('id', recipient.recipientRowId);
+      continue;
     }
 
     const variants = phoneVariants(recipient.phone);

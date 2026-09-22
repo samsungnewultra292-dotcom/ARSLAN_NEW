@@ -181,7 +181,19 @@
       "sendTemplateFailed": "Falha ao enviar o modelo: {reason}",
       "waitForSending": "Aguarde a mensagem terminar de ser enviada",
       "reactionFailed": "Falha na reação: {reason}",
-      "assignmentUpdateFailed": "Falha ao atualizar a atribuição"
+      "assignmentUpdateFailed": "Falha ao atualizar a atribuição",
+      "block": "Bloquear",
+      "unblock": "Desbloquear",
+      "blockContact": "Bloquear contato",
+      "unblockContact": "Desbloquear contato",
+      "blocked": "Bloqueado",
+      "unblocked": "Desbloqueado",
+      "blockFailed": "Falha ao atualizar o status de bloqueio",
+      "blockConfirmTitle": "Bloquear este contato?",
+      "blockConfirmDesc": "As mensagens de {phone} serão bloqueadas automaticamente. Desbloqueie quando quiser.",
+      "unblockConfirmTitle": "Desbloquear este contato?",
+      "unblockConfirmDesc": "As mensagens de {phone} voltarão a ser entregues.",
+      "cancel": "Cancelar"
     },
     "sessionTimer": {
       "expired": "Expirada",
@@ -1685,7 +1697,10 @@
       "phoneNumberIdNotNumeric": "O Phone Number ID deve conter apenas dígitos. Copie o id numérico em Meta → WhatsApp → Configuração da API, não o número de telefone em si.",
       "wabaIdNotNumeric": "O ID da conta do WhatsApp Business deve conter apenas dígitos. Copie-o em Meta → WhatsApp → Configuração da API.",
       "wabaSubscribed": "A conta do WhatsApp Business está inscrita neste app — os webhooks de entrada podem ser entregues.",
-      "wabaNotSubscribed": "A conta do WhatsApp Business não está inscrita neste app, então a Meta não entregará webhooks de entrada. Informe novamente o token de acesso e salve de novo para inscrevê-la."
+      "wabaNotSubscribed": "A conta do WhatsApp Business não está inscrita neste app, então a Meta não entregará webhooks de entrada. Informe novamente o token de acesso e salve de novo para inscrevê-la.",
+      "businessProfileTitle": "Perfil comercial",
+      "businessProfileDesc": "O perfil comercial público que a Meta exibe para esta WABA.",
+      "businessNameUnknown": "Empresa sem nome"
     },
     "sections": {
       "overview": "Visão geral",
@@ -2046,6 +2061,12 @@
     "idPlaceholder": "id",
     "buttonLabelPlaceholder": "Rótulo do botão",
     "addButton": "Adicionar botão",
+    "urlButtons": "Botões de URL",
+    "urlButtonsCount": "Botões de URL ({count}/{max})",
+    "urlButtonsHint": "Exibidos como links clicáveis adicionados ao corpo da mensagem.",
+    "urlLabelPlaceholder": "Rótulo do botão",
+    "urlPlaceholder": "https://exemplo.com",
+    "addUrlButton": "Adicionar botão de URL",
     "listButtonLabel": "Rótulo do botão da lista",
     "rowsCount": "Linhas ({count}/{max})",
     "sectionTitlePlaceholder": "Título da seção (opcional)",

@@ -32,6 +32,7 @@ import {
 import {
   validateInteractivePayload,
   interactivePayloadPreviewText,
+  interactiveBodyWithUrlButtons,
   type InteractiveMessagePayload,
 } from '@/lib/whatsapp/interactive';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
@@ -40,6 +41,7 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils';
+import { isPhoneBlocked } from '@/lib/whatsapp/blocklist';
 import { resolveContactSendTarget } from '@/lib/whatsapp/wa-identity';
 import type { MessageTemplate } from '@/types';
 import {
@@ -254,6 +256,17 @@ export async function sendMessageToConversation(
   const hasValidPhone = resolvedTarget.isPhone;
   const sanitizedPhone = hasValidPhone ? sendTarget : '';
 
+  // CRM blocklist (migration 045) — a blocked number is never messaged,
+  // regardless of which entry point reached the send core (inbox, quick
+  // replies, templates, /api/whatsapp/send, /api/v1/messages).
+  if (hasValidPhone && (await isPhoneBlocked(db, accountId, sanitizedPhone))) {
+    throw new SendMessageError(
+      'phone_blocked',
+      'This contact is blocked. Unblock them before sending a message.',
+      403,
+    );
+  }
+
   // WhatsApp config, account-scoped.
   const { data: config, error: configError } = await db
     .from('whatsapp_config')
@@ -374,7 +387,10 @@ export async function sendMessageToConversation(
           phoneNumberId: config.phone_number_id,
           accessToken,
           to: phone,
-          bodyText: p.body,
+          // URL buttons ship as link lines appended to the body (Meta has
+          // no interactive URL-button type) — validate the combined text
+          // against the same 1024 cap.
+          bodyText: interactiveBodyWithUrlButtons(p),
           headerText: p.header || undefined,
           footerText: p.footer || undefined,
           buttons: p.buttons,

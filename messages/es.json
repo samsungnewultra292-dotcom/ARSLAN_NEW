@@ -181,7 +181,19 @@
       "sendTemplateFailed": "Error al enviar la plantilla: {reason}",
       "waitForSending": "Espera a que el mensaje termine de enviarse",
       "reactionFailed": "Error en la reacción: {reason}",
-      "assignmentUpdateFailed": "Error al actualizar la asignación"
+      "assignmentUpdateFailed": "Error al actualizar la asignación",
+      "block": "Bloquear",
+      "unblock": "Desbloquear",
+      "blockContact": "Bloquear contacto",
+      "unblockContact": "Desbloquear contacto",
+      "blocked": "Bloqueado",
+      "unblocked": "Desbloqueado",
+      "blockFailed": "Error al actualizar el estado de bloqueo",
+      "blockConfirmTitle": "¿Bloquear este contacto?",
+      "blockConfirmDesc": "Los mensajes de {phone} se bloquearán automáticamente. Puedes desbloquear cuando quieras.",
+      "unblockConfirmTitle": "¿Desbloquear este contacto?",
+      "unblockConfirmDesc": "Los mensajes de {phone} volverán a entregarse.",
+      "cancel": "Cancelar"
     },
     "sessionTimer": {
       "expired": "Expirada",
@@ -1685,7 +1697,10 @@
       "phoneNumberIdNotNumeric": "El Phone Number ID debe contener solo dígitos. Copia el id numérico desde Meta → WhatsApp → Configuración de la API, no el número de teléfono en sí.",
       "wabaIdNotNumeric": "El ID de la cuenta de WhatsApp Business debe contener solo dígitos. Cópialo desde Meta → WhatsApp → Configuración de la API.",
       "wabaSubscribed": "La cuenta de WhatsApp Business está suscrita a esta app: los webhooks entrantes pueden entregarse.",
-      "wabaNotSubscribed": "La cuenta de WhatsApp Business no está suscrita a esta app, así que Meta no entregará webhooks entrantes. Vuelve a ingresar el token de acceso y guarda de nuevo para suscribirla."
+      "wabaNotSubscribed": "La cuenta de WhatsApp Business no está suscrita a esta app, así que Meta no entregará webhooks entrantes. Vuelve a ingresar el token de acceso y guarda de nuevo para suscribirla.",
+      "businessProfileTitle": "Perfil empresarial",
+      "businessProfileDesc": "El perfil empresarial público que Meta sirve para esta WABA.",
+      "businessNameUnknown": "Empresa sin nombre"
     },
     "sections": {
       "overview": "Resumen",
@@ -2046,6 +2061,12 @@
     "idPlaceholder": "id",
     "buttonLabelPlaceholder": "Texto del botón",
     "addButton": "Agregar botón",
+    "urlButtons": "Botones de URL",
+    "urlButtonsCount": "Botones de URL ({count}/{max})",
+    "urlButtonsHint": "Se muestran como enlaces en los que se puede tocar, añadidos al cuerpo del mensaje.",
+    "urlLabelPlaceholder": "Texto del botón",
+    "urlPlaceholder": "https://ejemplo.com",
+    "addUrlButton": "Agregar botón de URL",
     "listButtonLabel": "Texto del botón de la lista",
     "rowsCount": "Filas ({count}/{max})",
     "sectionTitlePlaceholder": "Título de la sección (opcional)",

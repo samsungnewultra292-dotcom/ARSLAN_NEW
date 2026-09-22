@@ -59,6 +59,11 @@ type WabaSubscription = {
   app_id_match: boolean | null;
   error?: string;
 };
+type BusinessProfile = {
+  checked: boolean;
+  profile?: { id: string; name?: string; profile_picture_url?: string };
+  error?: string;
+};
 
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
@@ -90,6 +95,7 @@ export function WhatsAppConfig() {
   const [statusMeta, setStatusMeta] = useState<MetaErrorMeta | null>(null);
   const [saveFailure, setSaveFailure] = useState<MetaFailure | null>(null);
   const [wabaSubscription, setWabaSubscription] = useState<WabaSubscription | null>(null);
+  const [businessProfile, setBusinessProfile] = useState<BusinessProfile | null>(null);
   // Guards against re-hydrating the form when the load effect below
   // re-runs for reasons unrelated to actually switching accounts —
   // e.g. Supabase's onAuthStateChange fires a token refresh (new
@@ -194,12 +200,14 @@ export function WhatsAppConfig() {
             setStatusMessage('');
             setStatusMeta(null);
             setWabaSubscription(payload.waba_subscription ?? null);
+            setBusinessProfile(payload.business_profile ?? null);
           } else {
             setConnectionStatus('disconnected');
             setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
             setStatusMessage(payload.message || '');
             setStatusMeta(payload.meta ?? null);
             setWabaSubscription(null);
+            setBusinessProfile(null);
           }
         } catch (err) {
           console.error('Health check failed:', err);
@@ -211,6 +219,7 @@ export function WhatsAppConfig() {
         setStatusMessage('');
         setStatusMeta(null);
         setWabaSubscription(null);
+        setBusinessProfile(null);
       }
     } catch (err) {
       console.error('fetchConfig error:', err);
@@ -387,6 +396,7 @@ export function WhatsAppConfig() {
         setStatusMessage('');
         setStatusMeta(null);
         setWabaSubscription(payload.waba_subscription ?? null);
+        setBusinessProfile(payload.business_profile ?? null);
         toast.success(
           payload.phone_info?.verified_name
             ? t('connectedTo', { name: payload.phone_info.verified_name })
@@ -398,6 +408,7 @@ export function WhatsAppConfig() {
         setStatusMessage(payload.message || '');
         setStatusMeta(payload.meta ?? null);
         setWabaSubscription(null);
+        setBusinessProfile(null);
         toast.error(payload.message || t('apiConnectionFailed'), { duration: 10000 });
       }
     } catch (err) {
@@ -463,6 +474,7 @@ export function WhatsAppConfig() {
       setStatusMeta(null);
       setSaveFailure(null);
       setWabaSubscription(null);
+      setBusinessProfile(null);
     } catch (err) {
       console.error('Reset error:', err);
       toast.error(t('resetFailed'));
@@ -621,6 +633,48 @@ export function WhatsAppConfig() {
           )}
           {connectionStatus !== 'connected' && statusMeta && renderMetaDetails(statusMeta)}
         </Alert>
+
+        {/* Business profile — display-only identity of the connected
+            WABA. Nothing here reconnects or reconfigures; it's the
+            read-only snapshot the settings page shows for the number
+            Meta already has our credentials for. */}
+        {connectionStatus === 'connected' && businessProfile?.checked && (
+          <Card className="border-border">
+            <CardHeader>
+              <CardTitle className="text-foreground">{t('businessProfileTitle')}</CardTitle>
+              <CardDescription className="text-muted-foreground">
+                {t('businessProfileDesc')}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {businessProfile.error ? (
+                <p className="text-xs text-muted-foreground">{businessProfile.error}</p>
+              ) : businessProfile.profile ? (
+                <div className="flex items-center gap-3">
+                  {businessProfile.profile.profile_picture_url && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={businessProfile.profile.profile_picture_url}
+                      alt={businessProfile.profile.name ?? t('businessProfileTitle')}
+                      className="size-14 shrink-0 rounded-full border border-border object-cover"
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {businessProfile.profile.name ||
+                        t('businessNameUnknown')}
+                    </p>
+                    {phoneNumberId && (
+                      <p className="text-xs text-muted-foreground">
+                        {t('phoneNumberId')}: {phoneNumberId}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Registration Status — the "is it actually live?" check.
             Credentials being valid is necessary but not sufficient;

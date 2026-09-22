@@ -181,7 +181,19 @@
       "sendTemplateFailed": "Failed to send template: {reason}",
       "waitForSending": "Wait for the message to finish sending",
       "reactionFailed": "Reaction failed: {reason}",
-      "assignmentUpdateFailed": "Failed to update assignment"
+      "assignmentUpdateFailed": "Failed to update assignment",
+      "block": "Block",
+      "unblock": "Unblock",
+      "blockContact": "Block contact",
+      "unblockContact": "Unblock contact",
+      "blocked": "Blocked",
+      "unblocked": "Unblocked",
+      "blockFailed": "Failed to update block status",
+      "blockConfirmTitle": "Block this contact?",
+      "blockConfirmDesc": "Messages from {phone} will be blocked automatically. Unblock anytime to resume.",
+      "unblockConfirmTitle": "Unblock this contact?",
+      "unblockConfirmDesc": "Messages from {phone} will be delivered again.",
+      "cancel": "Cancel"
     },
     "sessionTimer": {
       "expired": "Expired",
@@ -1695,7 +1707,10 @@
       "phoneNumberIdNotNumeric": "Phone Number ID must contain only digits. Copy the numeric id from Meta → WhatsApp → API Setup, not the phone number itself.",
       "wabaIdNotNumeric": "WhatsApp Business Account ID must contain only digits. Copy it from Meta → WhatsApp → API Setup.",
       "wabaSubscribed": "The WhatsApp Business Account is subscribed to this app — inbound webhooks can be delivered.",
-      "wabaNotSubscribed": "The WhatsApp Business Account is not subscribed to this app, so Meta will not deliver inbound webhooks. Re-enter the access token and save again to subscribe it."
+      "wabaNotSubscribed": "The WhatsApp Business Account is not subscribed to this app, so Meta will not deliver inbound webhooks. Re-enter the access token and save again to subscribe it.",
+      "businessProfileTitle": "Business Profile",
+      "businessProfileDesc": "The public business profile Meta serves for this WABA.",
+      "businessNameUnknown": "Unnamed business"
     },
     "sections": {
       "overview": "Overview",
@@ -2058,6 +2073,12 @@
     "idPlaceholder": "id",
     "buttonLabelPlaceholder": "Button label",
     "addButton": "Add button",
+    "urlButtons": "URL buttons",
+    "urlButtonsCount": "URL buttons ({count}/{max})",
+    "urlButtonsHint": "Rendered as tappable links appended to the message body.",
+    "urlLabelPlaceholder": "Button label",
+    "urlPlaceholder": "https://example.com",
+    "addUrlButton": "Add URL button",
     "listButtonLabel": "List button label",
     "rowsCount": "Rows ({count}/{max})",
     "sectionTitlePlaceholder": "Section title (optional)",

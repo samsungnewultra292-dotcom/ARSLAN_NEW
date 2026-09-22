@@ -1,6 +1,6 @@
 "use client";
 
-import { List, Reply } from "lucide-react";
+import { ExternalLink, List, Reply } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { InteractiveMessagePayload } from "@/lib/whatsapp/interactive";
 
@@ -23,6 +23,8 @@ export interface InteractivePreviewLabels {
   button?: string;
   /** Shown in place of an empty list button label. */
   menu?: string;
+  /** Shown in place of an untitled URL button. */
+  url?: string;
 }
 
 export function InteractivePreview({
@@ -37,6 +39,9 @@ export function InteractivePreview({
   const bodyLabel = labels?.body ?? "Message body…";
   const buttonLabel = labels?.button ?? "Button";
   const menuLabel = labels?.menu ?? "Menu";
+  const urlLabel = labels?.url ?? "Link";
+  const urlButtons =
+    payload.kind === "buttons" ? (payload.url_buttons ?? []) : [];
   return (
     <div
       className={cn(
@@ -55,6 +60,22 @@ export function InteractivePreview({
             <span className="text-muted-foreground">{bodyLabel}</span>
           )}
         </p>
+        {urlButtons.length > 0 ? (
+          <div className="mt-2 flex flex-col gap-1">
+            {urlButtons.map((b, i) => (
+              <a
+                key={b.id || i}
+                href={b.url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 truncate break-all text-xs text-primary underline underline-offset-2 visited:text-primary/70"
+              >
+                <ExternalLink className="h-3 w-3 shrink-0" />
+                <span className="truncate">{b.title || urlLabel}</span>
+              </a>
+            ))}
+          </div>
+        ) : null}
         {payload.footer ? (
           <p className="mt-1 break-words text-[11px] text-muted-foreground">
             {payload.footer}

@@ -751,7 +751,7 @@ export interface AutomationLog {
 // Quick replies — reusable snippets (migration 035)
 // ============================================================
 
-export type QuickReplyKind = 'text' | 'interactive';
+export type QuickReplyKind = 'text' | 'interactive' | 'video';
 
 export interface QuickReply {
   id: string;
@@ -765,6 +765,15 @@ export interface QuickReply {
   content_text?: string | null;
   /** Set when `kind === 'interactive'`. */
   interactive_payload?: InteractiveMessagePayload | null;
+  /** Set when `kind === 'video'`. */
+  media_url?: string | null;
+  /** Set when `kind === 'video'`. */
+  media_name?: string | null;
+  /** Set when `kind === 'video'`. */
+  media_type?: string | null;
+  /** Set when `kind === 'video'`. Storage object path the snippet owns —
+   *  used only to GC the object when the snippet is deleted. */
+  media_path?: string | null;
   created_at: string;
   updated_at: string;
 }
