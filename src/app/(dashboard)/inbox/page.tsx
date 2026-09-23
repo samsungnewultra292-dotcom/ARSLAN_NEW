@@ -21,7 +21,7 @@ import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
 import { toast } from "sonner";
-import { WifiOff } from "lucide-react";
+import { WifiOff, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
@@ -502,10 +502,14 @@ function InboxPageInner() {
   }, []);
 
   /**
-   * Soft periodic refresh of the conversation list while the tab is
-   * visible — the mobile background-throttle safety net (see
-   * `listResyncToken`). One minute cadence; the list refetch is a
-   * single indexed query. Skipped entirely while the tab is hidden.
+   * Silent background sync while the tab is visible: cycles
+   * `listResyncToken` on a soft timer (~5s) so the conversation list
+   * and, via MessageThread's `listResyncToken` prop, the open thread are
+   * refetched without any visible reload. This is the mobile
+   * background-throttle safety net — phone browsers can swallow realtime
+   * events, so a periodic DB read keeps new chats, unread counts and
+   * messages honest on every device. Skipped entirely while the tab is
+   * hidden (visibilitychange already catches up on return).
    */
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -513,7 +517,7 @@ function InboxPageInner() {
       if (document.visibilityState === "visible") {
         setListResyncToken((n) => n + 1);
       }
-    }, 60_000);
+    }, 5_000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -629,8 +633,43 @@ function InboxPageInner() {
   }, [router]);
 
 
+  /**
+   * Merge fetched rows into state instead of replacing outright. The
+   * fetch driven by the background ~5s poll can race an outbound send:
+   * the optimistic `temp-*` bubble exists before the DB has the row, so
+   * a replace would make the just-sent message blink out until the
+   * realtime INSERT lands. Preserving temp bubbles keeps the UI stable
+   * during silent refreshes. Sorted arrival-order is kept — temp bubbles
+   * are always the newest.
+   *
+   * A poll that returns the exact same rows is a true no-op: the old
+   * array reference is returned so React bails out of re-rendering and
+   * the thread's scroll/content don't move at all. `id`/`status`/
+   * `created_at` are the only message fields that ever change after
+   * insert, so comparing them is enough to detect a real update.
+   */
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
-    setMessages(loaded);
+    setMessages((prev) => {
+      const temps = prev.filter((m) => m.id.startsWith("temp-"));
+      if (temps.length === 0) {
+        if (
+          prev.length === loaded.length &&
+          prev.every(
+            (m, i) =>
+              m.id === loaded[i].id &&
+              m.status === loaded[i].status &&
+              m.created_at === loaded[i].created_at,
+          )
+        ) {
+          return prev;
+        }
+        return loaded;
+      }
+      const byId = new Map<string, Message>();
+      for (const m of loaded) byId.set(m.id, m);
+      for (const m of temps) if (!byId.has(m.id)) byId.set(m.id, m);
+      return Array.from(byId.values());
+    });
   }, []);
 
   const handleNewMessage = useCallback((msg: Message) => {
@@ -688,8 +727,22 @@ function InboxPageInner() {
   // before, unchanged.
   const hasActiveConv = !!activeConversation;
 
+  /**
+   * Count of conversations with unread inbound messages — the "new
+   * chats" total. Derived from `conversations` state (which the ~5s
+   * background poll keeps fresh) so it stays identical on every device;
+   * the currently-open thread is excluded automatically once its server
+   * unread reset lands. Drives the floating count pill so the new-chat
+   * number stays visible on mobile even while the list pane is hidden
+   * behind an open thread.
+   */
+  const newChatCount = conversations.filter(
+    (c) => c.unread_count > 0
+  ).length;
+
   return (
-    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden sm:-m-6">
+    // `relative` anchors the floating "N new chats" pill below.
+    <div className="relative -m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden sm:-m-6">
       {/* WhatsApp connection banner — in the flex column, not absolute,
           so it pushes the panels down instead of overlapping them. */}
       {whatsappConnected === false && (
@@ -748,6 +801,7 @@ function InboxPageInner() {
             onAssignChange={handleAssignChange}
             onBack={handleCloseConversation}
             resyncToken={resyncToken}
+            listResyncToken={listResyncToken}
             onRefresh={handleManualRefresh}
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
@@ -767,6 +821,29 @@ function InboxPageInner() {
           </div>
         )}
       </div>
+
+      {/* Floating "N new chats" indicator. Shown whenever a thread is
+          open and other conversations carry unread messages. On mobile the
+          conversation list is hidden behind the full-screen thread, so
+          this pill is the ONLY place the new-chat count stays visible —
+          it would otherwise be impossible to tell that new chats arrived
+          until the user backed out. On desktop it mirrors the same count
+          for identical behaviour on every screen. Tapping returns to the
+          conversation list (mobile) / the list pane (desktop). Positioned
+          above the composer so it can't cover incoming bubbles. */}
+      {hasActiveConv && newChatCount > 0 && (
+        <button
+          type="button"
+          onClick={handleCloseConversation}
+          aria-label={t("newChats", { count: newChatCount })}
+          className="absolute bottom-24 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-lg transition-all hover:bg-primary/90 active:scale-[0.97]"
+        >
+          <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+          <span className="whitespace-nowrap">
+            {t("newChats", { count: newChatCount })}
+          </span>
+        </button>
+      )}
     </div>
   );
 }

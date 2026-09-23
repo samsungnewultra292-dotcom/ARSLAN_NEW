@@ -105,6 +105,16 @@ interface MessageThreadProps {
    */
   resyncToken?: number;
   /**
+   * Independent second ticker for the OPEN THREAD. The parent cycles
+   * this on a soft ~5s timer while the tab is visible (mobile
+   * background-throttle safety net, same cadence as the conversation
+   * list). Refetches messages + reactions WITHOUT touching the loading
+   * spinner or the scroll position, so the UI stays perfectly stable —
+   * this is a silent background sync, not a reload. Optional so existing
+   * callers keep working.
+   */
+  listResyncToken?: number;
+  /**
    * Fired by the manual-refresh button in the thread header. The parent
    * typically bumps the same `resyncToken` it controls — this gives the
    * user a way to force a refetch when they suspect realtime missed an
@@ -176,6 +186,7 @@ export function MessageThread({
   onAssignChange,
   onBack,
   resyncToken = 0,
+  listResyncToken = 0,
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
@@ -360,6 +371,78 @@ export function MessageThread({
   const conversationId = conversation?.id;
   const hasUnread = (conversation?.unread_count ?? 0) > 0;
 
+  // SessionStorage key for the thread's saved scroll position. Writing
+  // it lets a later full-page reload reopen the conversation at the same
+  // spot instead of snapping to the bottom (or wherever the mount starts).
+  const SAVED_SCROLL_PREFIX = "wacrm:inbox:scroll:";
+
+  /**
+   * True once this thread has messages on screen for the CURRENT
+   * conversation. Read by the fetch effect to decide whether a refetch
+   * is a silent background sync (skip the loading spinner) or a first
+   * load (show it). Mirrors `messages.length > 0` and is kept in an
+   * effect placed *before* the fetch effect so the value is correct the
+   * moment a conversation switch starts (parent clears messages → ref
+   * flips to false before the fetch body reads it).
+   */
+  const hasMessagesRef = useRef(false);
+  useEffect(() => {
+    hasMessagesRef.current = messages.length > 0;
+  }, [messages]);
+
+  // Read the scroll position saved for a conversation (best-effort —
+  // sessionStorage can throw in popup/sandboxed contexts). Returns the
+  // literal "bottom" marker when the user was at/near the bottom (so a
+  // refresh re-pins to the live bottom even if messages arrived during
+  // the reload), otherwise the saved scrollTop offset.
+  const readSavedScroll = useCallback(
+    (convId: string): number | "bottom" | null => {
+      try {
+        const raw = sessionStorage.getItem(`${SAVED_SCROLL_PREFIX}${convId}`);
+        if (raw === null) return null;
+        if (raw === "bottom") return "bottom";
+        const n = Number.parseInt(raw, 10);
+        return Number.isFinite(n) ? n : null;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
+
+  // Persist the thread scroll position as the user scrolls (throttled),
+  // keyed per conversation so a reload can restore it. "bottom" is saved
+  // when the viewport sits within the same near-bottom threshold the
+  // auto-scroll follows, so refresh-while-at-bottom stays pinned to the
+  // newest message. Programmatic scrollTop writes fire `scroll` too, so
+  // the auto-scroll effect also updates the saved spot.
+  const lastScrollSaveRef = useRef(0);
+  const saveScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !conversationId) return;
+    const now = performance.now();
+    if (now - lastScrollSaveRef.current < 250) return;
+    lastScrollSaveRef.current = now;
+    try {
+      const distanceFromBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight;
+      sessionStorage.setItem(
+        `${SAVED_SCROLL_PREFIX}${conversationId}`,
+        distanceFromBottom < 140 ? "bottom" : String(el.scrollTop),
+      );
+    } catch {
+      // Best-effort persistence.
+    }
+  }, [conversationId]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !conversationId) return;
+    const onScroll = () => saveScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [conversationId, saveScroll]);
+
   const mediaMessageId =
     openMedia && openMedia.conversationId === conversationId
       ? openMedia.messageId
@@ -384,7 +467,11 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      setLoading(true);
+      // Only flash the spinner on a first load / conversation switch.
+      // Refetches triggered by the ~5s background poll (or reconnect /
+      // visibility catch-ups on already-loaded threads) stay silent so
+      // the chat UI never flickers or shifts under the reader.
+      if (!hasMessagesRef.current) setLoading(true);
 
       const { data, error } = await supabase
         .from("messages")
@@ -410,7 +497,9 @@ export function MessageThread({
     // the realtime channel reconnects or the tab regains focus —
     // realtime is best-effort and any message events sent while the WS
     // was disconnected or throttled are otherwise lost.
-  }, [conversationId, resyncToken]);
+    // `listResyncToken` drives the ~5s silent background sync of the
+    // open thread (mobile background-throttle safety net).
+  }, [conversationId, resyncToken, listResyncToken]);
 
   // Reactions fetch — pulls the current state from the DB. Kept separate
   // from the channel subscription below so a `resyncToken` bump just
@@ -440,7 +529,7 @@ export function MessageThread({
     return () => {
       cancelled = true;
     };
-  }, [conversationId, resyncToken]);
+  }, [conversationId, resyncToken, listResyncToken]);
 
   // Reactions realtime subscription per conversation. Subscribing here
   // (not at the page level) keeps the channel scoped to the visible
@@ -547,7 +636,25 @@ export function MessageThread({
   // conversation just opened/switched. A background-tab / visibility
   // resync that refetches the same rows must NOT drag a reader who is
   // scrolled up, paging through an old message, back to the bottom.
+  //
+  // Full-page-reload handling: when the thread mounts with the deep-linked
+  // conversation already open, we restore the saved scrollTop instead of
+  // snapping to the bottom, so a refresh lands the agent right where they
+  // were working. Plain in-session conversation clicks still open at the
+  // bottom, as before.
   const announcedBottomForRef = useRef<string | undefined>(undefined);
+  // The conversation id the page was (re)loaded with, read once at mount
+  // from the URL (`/inbox?c=<id>`). Only THIS conversation ever gets a
+  // scroll-restore — plain in-session clicks still open at the bottom.
+  // window.location is authoritative for both browser refreshes and
+  // dashboard deep-links; the value only feeds the auto-scroll behaviour,
+  // never rendered HTML, so an SSR-vs-client difference can't cause a
+  // hydration mismatch.
+  const [restoreConversationId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("c");
+  });
+  const initialMountRestoreDoneRef = useRef(false);
   useEffect(() => {
     if (!scrollRef.current) return;
     // Opening a conversation starts empty (parent clears `messages`)
@@ -558,6 +665,35 @@ export function MessageThread({
     const freshConversation = announcedBottomForRef.current !== conversationId;
     if (freshConversation) {
       announcedBottomForRef.current = conversationId;
+      // Restore the saved position once, only for the conversation that
+      // was already open when this mount began (i.e. a page refresh on
+      // /inbox?c=<id>). Handles the "refresh landed me at the top" case.
+      const isInitialDeepLink =
+        !initialMountRestoreDoneRef.current &&
+        conversationId === restoreConversationId;
+      if (isInitialDeepLink) {
+        initialMountRestoreDoneRef.current = true;
+        const saved = readSavedScroll(conversationId);
+        if (saved === "bottom") {
+          // Was pinned to the bottom before the reload — re-pin to the
+          // live bottom (covers messages that landed while reloading).
+          el.scrollTop = el.scrollHeight;
+          requestAnimationFrame(() => {
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+          return;
+        }
+        if (saved !== null) {
+          el.scrollTop = saved;
+          // Re-apply once more after paint: async content (images, media)
+          // can grow scrollHeight after the first pass, pushing the saved
+          // offset elsewhere. Stay clamped to whatever the real height is.
+          requestAnimationFrame(() => {
+            if (el) el.scrollTop = Math.min(saved, el.scrollHeight);
+          });
+          return;
+        }
+      }
       el.scrollTop = el.scrollHeight;
       return;
     }
@@ -565,7 +701,7 @@ export function MessageThread({
     if (distanceFromBottom < 140) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, conversationId]);
+  }, [messages, conversationId, restoreConversationId, readSavedScroll]);
 
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {

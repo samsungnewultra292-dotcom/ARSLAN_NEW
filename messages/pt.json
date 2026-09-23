@@ -135,7 +135,8 @@
   },
   "Inbox": {
     "page": {
-      "whatsappNotConnected": "O WhatsApp® não está conectado. Vá em Configurações para conectar sua conta."
+      "whatsappNotConnected": "O WhatsApp® não está conectado. Vá em Configurações para conectar sua conta.",
+      "newChats": "{count, plural, =1 {# novo chat} other {# novos chats}}"
     },
     "conversationList": {
       "searchPlaceholder": "Buscar conversas...",
