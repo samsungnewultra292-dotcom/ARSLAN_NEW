@@ -70,7 +70,10 @@ export async function PATCH(
         typeof body.media_type === 'string' ? body.media_type.trim() : ''
       update.media_path =
         typeof body.media_path === 'string' ? body.media_path.trim() : ''
-      update.content_text = null
+      const caption =
+        typeof body.content_text === 'string' ? body.content_text.trim() : ''
+      update.content_text =
+        caption.length > 0 ? caption.slice(0, 1024) : null
       update.interactive_payload = null
     } else {
       const text = typeof body.content_text === 'string' ? body.content_text : ''

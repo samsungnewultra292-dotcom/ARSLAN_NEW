@@ -542,13 +542,30 @@ export function MessageThread({
       });
   }, [conversationId, hasUnread]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages — but only yank the viewport
+  // when the user is already near the bottom (message-following) or the
+  // conversation just opened/switched. A background-tab / visibility
+  // resync that refetches the same rows must NOT drag a reader who is
+  // scrolled up, paging through an old message, back to the bottom.
+  const announcedBottomForRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (scrollRef.current) {
-      const el = scrollRef.current;
+    if (!scrollRef.current) return;
+    // Opening a conversation starts empty (parent clears `messages`)
+    // and loads async — don't burn the forced scroll on the empty
+    // paint, or the content that follows would open at the top.
+    if (messages.length === 0) return;
+    const el = scrollRef.current;
+    const freshConversation = announcedBottomForRef.current !== conversationId;
+    if (freshConversation) {
+      announcedBottomForRef.current = conversationId;
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 140) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, conversationId]);
 
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {

@@ -23,9 +23,10 @@ export function useTotalUnread(): number {
     const supabase = createClient();
     let cancelled = false;
 
-    // Initial load. RLS scopes this to the signed-in user automatically —
-    // no explicit user_id filter needed here.
-    (async () => {
+    // Initial load + background-tab safety-net refetch. RLS scopes this
+    // to the signed-in user automatically — no explicit user_id filter
+    // needed here.
+    const refresh = async () => {
       const { data, error } = await supabase
         .from("conversations")
         .select("id, unread_count");
@@ -40,7 +41,19 @@ export function useTotalUnread(): number {
       }
       countsRef.current = map;
       setTotal(sum);
-    })();
+    };
+    void refresh();
+
+    // Phone browsers throttle background-tab WebSockets, so the channel
+    // below can silently miss a badge bump while the tab is hidden. A
+    // refetch every time the tab is brought back keeps the nav badge
+    // honest on mobile.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
 
     const channel = supabase
       .channel("total-unread-realtime")
@@ -66,6 +79,9 @@ export function useTotalUnread(): number {
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
       supabase.removeChannel(channel);
     };
   }, []);

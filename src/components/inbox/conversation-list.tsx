@@ -34,6 +34,15 @@ interface ConversationListProps {
    * or the tab was throttled. Optional so existing callers keep working.
    */
   resyncToken?: number;
+  /**
+   * Independent second resync ticker for the LIST ONLY. The parent cycles
+   * this on a soft timer while the tab is visible (background-tab
+   * throttling can swallow realtime events on phones even without a full
+   * disconnect). Kept separate from `resyncToken` so the open thread —
+   * which shares `resyncToken` — isn't refetched on this cadence and a
+   * reader mid-thread isn't disturbed.
+   */
+  listResyncToken?: number;
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
@@ -52,6 +61,7 @@ export function ConversationList({
   conversations,
   onConversationsLoaded,
   resyncToken = 0,
+  listResyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
   
@@ -124,7 +134,9 @@ export function ConversationList({
     // `resyncToken` is included so the parent can force a refetch when
     // the realtime channel reconnects or the tab regains focus — catches
     // up on any events sent while the WS was disconnected or throttled.
-  }, [resyncToken]);
+    // `listResyncToken` drives the parent's soft periodic list-only
+    // refresh (mobile background-tab safety net).
+  }, [resyncToken, listResyncToken]);
 
   // Tag definitions for the filter picker — loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.

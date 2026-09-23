@@ -53,10 +53,10 @@ export function useRealtime({
     if (!enabled) return;
 
     const supabase = createClient();
+    let channel: RealtimeChannel | undefined;
 
-    const channel = supabase
-      .channel(channelName)
-      .on(
+    const register = (ch: RealtimeChannel) => {
+      ch.on(
         "postgres_changes",
         { event: "*", schema: "public", table: "messages" },
         (payload) => {
@@ -67,36 +67,74 @@ export function useRealtime({
           });
         }
       )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
-        (payload) => {
-          onConversationRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
-            new: payload.new as Conversation,
-            old: payload.old as Partial<Conversation>,
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "contact_tags" },
-        (payload) => {
-          onContactTagRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<ContactTag>["eventType"],
-            new: payload.new as ContactTag,
-            old: payload.old as Partial<ContactTag>,
-          });
-        }
-      )
-      .subscribe((status) => {
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "conversations" },
+          (payload) => {
+            onConversationRef.current?.({
+              eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
+              new: payload.new as Conversation,
+              old: payload.old as Partial<Conversation>,
+            });
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "contact_tags" },
+          (payload) => {
+            onContactTagRef.current?.({
+              eventType: payload.eventType as RealtimeEvent<ContactTag>["eventType"],
+              new: payload.new as ContactTag,
+              old: payload.old as Partial<ContactTag>,
+            });
+          }
+        );
+    };
+
+    const buildAndSubscribe = () => {
+      channel = supabase.channel(channelName);
+      register(channel);
+      channel.subscribe((status) => {
         setIsConnected(status === "SUBSCRIBED");
       });
+      channelRef.current = channel;
+    };
 
-    channelRef.current = channel;
+    buildAndSubscribe();
+
+    // Mobile / background-tab safety net: a tab that sat backgrounded
+    // (browser throttles the WS, or it dropped while the phone slept)
+    // may be left on a dead channel with no way to know. When the tab
+    // comes back, check the channel health and rebuild+resubscribe if it
+    // no longer reports joined. The parent still bumps a resyncToken on
+    // these same events to refetch anything lost in the gap — rebuilding
+    // here just guarantees the pipe itself is live again.
+    const resyncIfNeeded = () => {
+      const current = channelRef.current;
+      if (current && current.state !== "joined") {
+        supabase.removeChannel(current);
+        buildAndSubscribe();
+      }
+    };
+    const onDocumentVisible = () => {
+      if (document.visibilityState === "visible") resyncIfNeeded();
+    };
+    const onWindowFocus = () => resyncIfNeeded();
+    const onOnline = () => resyncIfNeeded();
+    const onPageShow = () => resyncIfNeeded();
+
+    document.addEventListener("visibilitychange", onDocumentVisible);
+    window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("pageshow", onPageShow);
 
     return () => {
-      supabase.removeChannel(channel);
+      document.removeEventListener("visibilitychange", onDocumentVisible);
+      window.removeEventListener("focus", onWindowFocus);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("pageshow", onPageShow);
+      const current = channelRef.current ?? channel;
+      if (current) supabase.removeChannel(current);
       channelRef.current = null;
       setIsConnected(false);
     };

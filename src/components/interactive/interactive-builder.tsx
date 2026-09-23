@@ -1,12 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { slugify } from "@/components/flows/shared";
 import { INTERACTIVE_LIMITS } from "@/lib/whatsapp/meta-api";
@@ -15,7 +22,6 @@ import {
   type InteractiveButtonsPayload,
   type InteractiveListPayload,
   type InteractiveMessagePayload,
-  type InteractiveUrlButton,
 } from "@/lib/whatsapp/interactive";
 import { InteractivePreview } from "./interactive-preview";
 
@@ -125,7 +131,7 @@ export function InteractiveBuilder({
             />
           </Field>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Field
               label={t("header")}
               counter={`${(value.header ?? "").length}/${INTERACTIVE_LIMITS.headerTextMaxLength}`}
@@ -197,6 +203,23 @@ export function InteractiveBuilder({
 // Buttons editor
 // ------------------------------------------------------------
 
+/**
+ * Maximum URL buttons, shared with `lib/whatsapp/interactive.ts`'s
+ * validator (it hard-codes the same ceiling). Kept local here because
+ * the enum isn't exported — the two are fenced by tests on the
+ * validator, so they can't drift silently.
+ */
+const MAX_URL_BUTTONS = 3;
+
+/** A merged view over the payload's two button arrays — `buttons`
+ *  (native Meta reply buttons, the "QC Reply" type) and `url_buttons`
+ *  (rendered as tappable link lines). The persisted payload keeps the
+ *  two arrays separate for backwards compatibility; the editor presents
+ *  a single list where each button has a type chooser. */
+type ButtonRow =
+  | { type: "quick_reply"; id: string; title: string }
+  | { type: "url"; id: string; title: string; url: string };
+
 function ButtonsEditor({
   value,
   onChange,
@@ -208,151 +231,218 @@ function ButtonsEditor({
 }) {
   const t = useTranslations("Interactive");
   const buttons = value.buttons;
-  const update = (idx: number, patch: Partial<InteractiveButtonsPayload["buttons"][number]>) =>
-    onChange({
-      ...value,
-      buttons: buttons.map((b, i) => (i === idx ? { ...b, ...patch } : b)),
-    });
-  const add = () =>
-    onChange({
-      ...value,
-      buttons: [
-        ...buttons,
-        { id: nextId(buttons.map((b) => b.id), "btn_"), title: "" },
-      ],
-    });
-  const remove = (idx: number) =>
-    onChange({ ...value, buttons: buttons.filter((_, i) => i !== idx) });
-
-  // URL buttons ship as `Label — url` lines appended to the body on send
-  // (Meta has no interactive URL-button type), so they get their own
-  // editor block + the same 3-button ceiling.
   const urlButtons = value.url_buttons ?? [];
-  const updateUrl = (
-    idx: number,
-    patch: Partial<InteractiveUrlButton>,
-  ) =>
-    onChange({
-      ...value,
-      url_buttons: urlButtons.map((b, i) => (i === idx ? { ...b, ...patch } : b)),
-    });
-  const addUrl = () =>
-    onChange({
-      ...value,
-      url_buttons: [
-        ...urlButtons,
-        { id: nextId(urlButtons.map((b) => b.id), "url_"), title: "", url: "" },
-      ],
-    });
-  const removeUrl = (idx: number) =>
-    onChange({
-      ...value,
-      url_buttons: urlButtons.filter((_, i) => i !== idx),
-    });
+
+  // Merged presentation list — QC buttons first, then URL buttons. Both
+  // arrays still map back onto their own columns on every edit, so the
+  // persisted shape never changes (existing configs keep working).
+  const rows: ButtonRow[] = [
+    ...buttons.map((b): ButtonRow => ({ type: "quick_reply", id: b.id, title: b.title })),
+    ...urlButtons.map((b): ButtonRow => ({ type: "url", id: b.id, title: b.title, url: b.url })),
+  ];
+
+  // Writable fields shared by both button kinds (url is ignored for
+  // quick replies, matching the previous separate editors).
+  type ButtonPatch = { id?: string; title?: string; url?: string };
+
+  const update = (row: ButtonRow, patch: ButtonPatch) => {
+    if (row.type === "quick_reply") {
+      onChange({
+        ...value,
+        buttons: buttons.map((b) => (b.id === row.id ? { ...b, ...patch } : b)),
+      });
+    } else {
+      onChange({
+        ...value,
+        url_buttons: urlButtons.map((b) => (b.id === row.id ? { ...b, ...patch } : b)),
+      });
+    }
+  };
+
+  /** Move a button between the two types. The target array always gets a
+   *  fresh id — a stale id could collide with one already held by the
+   *  destination array and trip the duplicate-id validator. */
+  const setType = (row: ButtonRow, type: "quick_reply" | "url") => {
+    if (row.type === type) return;
+    if (type === "quick_reply") {
+      if (buttons.length >= INTERACTIVE_LIMITS.maxButtons) {
+        toast.error(
+          t("buttonLimitReached", { max: INTERACTIVE_LIMITS.maxButtons }),
+        );
+        return;
+      }
+      onChange({
+        ...value,
+        url_buttons: urlButtons.filter((b) => b.id !== row.id),
+        buttons: [
+          ...buttons,
+          {
+            id: nextId(buttons.map((b) => b.id), "btn_"),
+            title: row.title,
+          },
+        ],
+      });
+    } else {
+      if (urlButtons.length >= MAX_URL_BUTTONS) {
+        toast.error(t("urlButtonLimitReached", { max: MAX_URL_BUTTONS }));
+        return;
+      }
+      onChange({
+        ...value,
+        buttons: buttons.filter((b) => b.id !== row.id),
+        url_buttons: [
+          ...urlButtons,
+          {
+            id: nextId(urlButtons.map((b) => b.id), "url_"),
+            title: row.title,
+            url: row.type === "url" ? row.url : "",
+          },
+        ],
+      });
+    }
+  };
+
+  const remove = (row: ButtonRow) => {
+    if (row.type === "quick_reply") {
+      onChange({ ...value, buttons: buttons.filter((b) => b.id !== row.id) });
+    } else {
+      onChange({
+        ...value,
+        url_buttons: urlButtons.filter((b) => b.id !== row.id),
+      });
+    }
+  };
+
+  const add = (type: "quick_reply" | "url") => {
+    if (type === "quick_reply") {
+      if (buttons.length >= INTERACTIVE_LIMITS.maxButtons) {
+        toast.error(
+          t("buttonLimitReached", { max: INTERACTIVE_LIMITS.maxButtons }),
+        );
+        return;
+      }
+      onChange({
+        ...value,
+        buttons: [
+          ...buttons,
+          { id: nextId(buttons.map((b) => b.id), "btn_"), title: "" },
+        ],
+      });
+    } else {
+      if (urlButtons.length >= MAX_URL_BUTTONS) {
+        toast.error(t("urlButtonLimitReached", { max: MAX_URL_BUTTONS }));
+        return;
+      }
+      onChange({
+        ...value,
+        url_buttons: [
+          ...urlButtons,
+          { id: nextId(urlButtons.map((b) => b.id), "url_"), title: "", url: "" },
+        ],
+      });
+    }
+  };
 
   return (
     <div>
-      <label className="mb-2 block text-xs text-muted-foreground">
-        {t("buttonsCount", { count: buttons.length, max: INTERACTIVE_LIMITS.maxButtons })}
-      </label>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <label className="text-xs text-muted-foreground">
+          {t("buttonsCount", { count: buttons.length, max: INTERACTIVE_LIMITS.maxButtons })}
+        </label>
+        {urlButtons.length > 0 && (
+          <label className="text-xs text-muted-foreground">
+            {t("urlButtonsCount", { count: urlButtons.length, max: MAX_URL_BUTTONS })}
+          </label>
+        )}
+      </div>
+      <p className="mb-2 text-[10px] text-muted-foreground">{t("buttonsHint")}</p>
+
       <div className="flex flex-col gap-2">
-        {buttons.map((b, i) => (
+        {rows.map((row) => (
           <div
-            key={i}
-            className="flex items-center gap-2 rounded-md border border-border bg-muted/40 p-2"
+            key={row.id}
+            className="space-y-2 rounded-md border border-border bg-muted/40 p-2"
           >
+            <div className="flex items-center gap-2">
+              <label className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t("buttonType")}
+              </label>
+              <select
+                value={row.type}
+                onChange={(e) =>
+                  setType(row, e.target.value as "quick_reply" | "url")
+                }
+                className="h-9 w-auto min-w-0 flex-1 rounded-md border border-border bg-muted px-2 py-1.5 text-sm text-foreground outline-none transition-colors focus:border-primary/50"
+              >
+                <option value="quick_reply">{t("buttonTypeQcReply")}</option>
+                <option value="url">{t("buttonTypeUrl")}</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => remove(row)}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
+                aria-label={t("removeButton")}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
             {advanced && (
               <Input
-                value={b.id}
-                onChange={(e) => update(i, { id: slugify(e.target.value, `btn_${i + 1}`) })}
+                value={row.id}
+                onChange={(e) => update(row, { id: slugify(e.target.value, row.id) })}
                 placeholder={t("idPlaceholder")}
-                className="w-28 bg-muted font-mono text-xs"
+                className="bg-muted font-mono text-xs"
               />
             )}
-            <Input
-              value={b.title}
-              maxLength={INTERACTIVE_LIMITS.buttonTitleMaxLength}
-              onChange={(e) => update(i, { title: e.target.value })}
-              placeholder={t("buttonLabelPlaceholder")}
-              className="flex-1 bg-muted"
-            />
-            <span className="w-10 shrink-0 text-right text-[10px] text-muted-foreground">
-              {b.title.length}/{INTERACTIVE_LIMITS.buttonTitleMaxLength}
-            </span>
-            {buttons.length > 1 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => remove(i)}
-                className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                {t("label")}
+              </label>
+              <Input
+                value={row.title}
+                maxLength={INTERACTIVE_LIMITS.buttonTitleMaxLength}
+                onChange={(e) => update(row, { title: e.target.value })}
+                placeholder={t("buttonLabelPlaceholder")}
+                className="bg-muted text-foreground"
+              />
+            </div>
+
+            {row.type === "url" && (
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                  {t("urlField")}
+                </label>
+                <Input
+                  type="url"
+                  inputMode="url"
+                  value={row.url ?? ""}
+                  onChange={(e) => update(row, { url: e.target.value })}
+                  placeholder={t("urlPlaceholder")}
+                  className="bg-muted font-mono text-xs text-foreground"
+                />
+              </div>
             )}
           </div>
         ))}
       </div>
-      {buttons.length < INTERACTIVE_LIMITS.maxButtons && (
-        <Button variant="ghost" size="sm" onClick={add} className="mt-2">
-          <Plus className="h-3.5 w-3.5" />
-          {t("addButton")}
-        </Button>
-      )}
 
-      <div className="mt-4">
-        <label className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-          <span>{t("urlButtons")}</span>
-          <span className="text-[10px]">
-            {t("urlButtonsCount", { count: urlButtons.length, max: 3 })}
-          </span>
-        </label>
-        <p className="mb-2 text-[10px] text-muted-foreground">{t("urlButtonsHint")}</p>
-        <div className="flex flex-col gap-2">
-          {urlButtons.map((b, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-2 rounded-md border border-border bg-muted/40 p-2"
-            >
-              {advanced && (
-                <Input
-                  value={b.id}
-                  onChange={(e) =>
-                    updateUrl(i, { id: slugify(e.target.value, `url_${i + 1}`) })
-                  }
-                  placeholder={t("idPlaceholder")}
-                  className="w-28 bg-muted font-mono text-xs"
-                />
-              )}
-              <Input
-                value={b.title}
-                maxLength={INTERACTIVE_LIMITS.buttonTitleMaxLength}
-                onChange={(e) => updateUrl(i, { title: e.target.value })}
-                placeholder={t("urlLabelPlaceholder")}
-                className="w-40 bg-muted"
-              />
-              <Input
-                value={b.url}
-                onChange={(e) => updateUrl(i, { url: e.target.value })}
-                placeholder={t("urlPlaceholder")}
-                className="flex-1 bg-muted"
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => removeUrl(i)}
-                className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ))}
-        </div>
-        {urlButtons.length < 3 && (
-          <Button variant="ghost" size="sm" onClick={addUrl} className="mt-2">
+      <div className="mt-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger className="flex h-8 items-center gap-1 rounded-md border border-border bg-muted px-2 text-xs text-foreground transition-colors hover:border-primary hover:text-primary">
             <Plus className="h-3.5 w-3.5" />
-            {t("addUrlButton")}
-          </Button>
-        )}
+            {t("addButton")}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-40 border-border bg-popover">
+            <DropdownMenuItem onClick={() => add("quick_reply")}>
+              {t("buttonTypeQcReply")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => add("url")}>
+              {t("buttonTypeUrl")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

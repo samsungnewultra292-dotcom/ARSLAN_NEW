@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildMediaPath, MEDIA_MAX_BYTES_BY_KIND } from "./upload-media";
+import {
+  buildMediaPath,
+  validateMediaFile,
+  MEDIA_MAX_BYTES,
+  MEDIA_MAX_BYTES_BY_KIND,
+} from "./upload-media";
 
 const ACCOUNT = "11111111-2222-3333-4444-555555555555";
 
@@ -53,5 +58,75 @@ describe("MEDIA_MAX_BYTES_BY_KIND", () => {
     expect(MEDIA_MAX_BYTES_BY_KIND.video).toBe(16 * 1024 * 1024);
     expect(MEDIA_MAX_BYTES_BY_KIND.audio).toBe(16 * 1024 * 1024);
     expect(MEDIA_MAX_BYTES_BY_KIND.document).toBe(16 * 1024 * 1024);
+  });
+
+  it("keeps MEDIA_MAX_BYTES in sync with the bucket file_size_limit", () => {
+    expect(MEDIA_MAX_BYTES).toBe(16 * 1024 * 1024);
+  });
+});
+
+describe("validateMediaFile", () => {
+  it("accepts a file within the kind's ceiling", () => {
+    const res = validateMediaFile("video", {
+      name: "clip.mp4",
+      size: MEDIA_MAX_BYTES_BY_KIND.video,
+      type: "video/mp4",
+    });
+    expect(res.ok).toBe(true);
+    expect(res.limit).toBe(MEDIA_MAX_BYTES_BY_KIND.video);
+  });
+
+  it("rejects an over-size file and names the limit", () => {
+    const res = validateMediaFile("image", {
+      name: "huge.png",
+      size: MEDIA_MAX_BYTES_BY_KIND.image + 1,
+      type: "image/png",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("5 MB");
+  });
+
+  it("rejects an empty file", () => {
+    const res = validateMediaFile("document", {
+      name: "empty.pdf",
+      size: 0,
+      type: "application/pdf",
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects an obviously cross-kind MIME mismatch", () => {
+    const res = validateMediaFile("video", {
+      name: "troll.exe",
+      size: 1024,
+      type: "application/octet-stream",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("video");
+  });
+
+  it("accepts exotic-but-plausible types instead of over-gating", () => {
+    const mov = validateMediaFile("video", {
+      name: "screen.mov",
+      size: 1024,
+      type: "video/quicktime",
+    });
+    expect(mov.ok).toBe(true);
+
+    const heic = validateMediaFile("image", {
+      name: "shot.heic",
+      size: 1024,
+      type: "image/heic",
+    });
+    expect(heic.ok).toBe(true);
+  });
+
+  it("accepts any MIME for documents", () => {
+    const res = validateMediaFile("document", {
+      name: "weird.txt",
+      size: 1024,
+      type: "text/plain",
+    });
+    expect(res.ok).toBe(true);
   });
 });

@@ -33,6 +33,69 @@ export const MEDIA_MAX_BYTES_BY_KIND = {
   document: 16 * 1024 * 1024,
 } as const;
 
+/** Kinds a caller may throw at `validateMediaFile`. */
+export type MediaKind = keyof typeof MEDIA_MAX_BYTES_BY_KIND;
+
+/**
+ * Cross-kind MIME sanity check. Deliberately permissive — we only reject
+ * the obvious mismatches (an `application/*` or empty type dropped into
+ * the image/video/audio slot), so a `.mov` (`video/quicktime`) or HEIC
+ * (`image/heic`) still passes and Meta is left to rule on the exotic
+ * ones at send time. Documents accept anything.
+ */
+const MALFORMED_KIND =
+  (kind: MediaKind, type: string) =>
+    type !== "" &&
+    ((kind === "image" && !type.startsWith("image/")) ||
+      (kind === "video" && !type.startsWith("video/")) ||
+      (kind === "audio" && !type.startsWith("audio/")));
+
+export interface ValidateMediaFileResult {
+  ok: boolean;
+  /** User-facing reason when `ok` is false (composer/manager toasts). */
+  error?: string;
+  /** The kind's ceiling in bytes — callers format localized messages. */
+  limit: number;
+  size: number;
+}
+
+/**
+ * Shared pre-upload validation across the composer, quick-reply manager,
+ * and automation Send-Message steps. Enforces the per-kind ceiling from
+ * `MEDIA_MAX_BYTES_BY_KIND` (mirrors Meta's caps so we reject BEFORE
+ * uploading and orphaning an object Meta would refuse at send) plus a
+ * light cross-kind MIME mismatch check. Pure + exported so it unit-tests
+ * without a Supabase client.
+ */
+export function validateMediaFile(
+  kind: MediaKind,
+  file: { name: string; size: number; type: string },
+): ValidateMediaFileResult {
+  const limit = MEDIA_MAX_BYTES_BY_KIND[kind];
+  if (file.size <= 0) {
+    return { ok: false, error: "That file is empty.", limit, size: file.size };
+  }
+  if (file.size > limit) {
+    return {
+      ok: false,
+      error: `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — ${kind} limit is ${Math.round(
+        limit / 1024 / 1024,
+      )} MB.`,
+      limit,
+      size: file.size,
+    };
+  }
+  if (MALFORMED_KIND(kind, file.type)) {
+    return {
+      ok: false,
+      error: `Unsupported ${kind} file type${file.type ? ` (${file.type})` : ""}.`,
+      limit,
+      size: file.size,
+    };
+  }
+  return { ok: true, limit, size: file.size };
+}
+
 /**
  * Build the account-scoped object path for an upload. Pure + exported so
  * it can be unit-tested without a Supabase client.

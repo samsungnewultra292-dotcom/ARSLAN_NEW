@@ -68,6 +68,17 @@ function InboxPageInner() {
   const [resyncToken, setResyncToken] = useState(0);
 
   /**
+   * LIST-ONLY resync ticker, cycled on a soft timer while the tab is
+   * visible (60s). Phone browsers throttle background-tab WebSockets
+   * even when the socket stays nominally "joined", so realtime can
+   * silently miss a new-conversation event. The list is cheap to
+   * refetch and catching a new chat there matters most; the open thread
+   * deliberately does NOT ride this cadence, so a reader mid-thread
+   * isn't disturbed or re-scrolled by a content swap.
+   */
+  const [listResyncToken, setListResyncToken] = useState(0);
+
+  /**
    * Whether the desktop contact sidebar (tags / deals / notes) is shown.
    * Defaults to `true` (the historical behaviour) and is restored from
    * localStorage after mount. We deliberately do NOT read localStorage in
@@ -468,18 +479,42 @@ function InboxPageInner() {
    * Refetch when the tab regains focus. Background tabs may have their
    * WS throttled by the browser even without a full disconnect, so a
    * visibilitychange → visible is a reliable signal that we may have
-   * missed events. Cheap to fire; the children dedupe on their own.
+   * missed events. Also covers `focus`, `online` (network came back)
+   * and `pageshow` (back-forward cache restore) — all coalesced onto
+   * the same token so children dedupe on their own. Cheap to fire.
    */
   useEffect(() => {
-    const onVisibility = () => {
+    const onVisible = () => {
       if (document.visibilityState === "visible") {
         setResyncToken((n) => n + 1);
       }
     };
-    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
+    window.addEventListener("pageshow", onVisible);
     return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
+      window.removeEventListener("pageshow", onVisible);
     };
+  }, []);
+
+  /**
+   * Soft periodic refresh of the conversation list while the tab is
+   * visible — the mobile background-throttle safety net (see
+   * `listResyncToken`). One minute cadence; the list refetch is a
+   * single indexed query. Skipped entirely while the tab is hidden.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        setListResyncToken((n) => n + 1);
+      }
+    }, 60_000);
+    return () => window.clearInterval(id);
   }, []);
 
   /**
@@ -682,6 +717,7 @@ function InboxPageInner() {
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
             resyncToken={resyncToken}
+            listResyncToken={listResyncToken}
           />
         </div>
 

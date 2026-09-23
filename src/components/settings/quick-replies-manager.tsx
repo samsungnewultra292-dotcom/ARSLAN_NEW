@@ -36,7 +36,7 @@ import {
 import {
   uploadAccountMedia,
   deleteAccountMedia,
-  MEDIA_MAX_BYTES_BY_KIND,
+  validateMediaFile,
 } from "@/lib/storage/upload-media";
 import { CHAT_MEDIA_BUCKET } from "@/components/inbox/message-composer";
 import type { QuickReply, QuickReplyKind } from "@/types";
@@ -118,13 +118,9 @@ export function QuickRepliesManager() {
   // Upload a video into chat-media and stage it on the draft. The stored
   // object is never GC'd — the snippet is the durable owner of the media.
   const stageVideo = useCallback(async (file: File) => {
-    const max = MEDIA_MAX_BYTES_BY_KIND.video;
-    if (file.size > max) {
-      toast.error(
-        `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — video limit is ${Math.round(
-          max / 1024 / 1024,
-        )} MB.`,
-      );
+    const check = validateMediaFile("video", file);
+    if (!check.ok) {
+      toast.error(check.error ?? "Unsupported file.");
       return;
     }
     setUploading(true);
@@ -170,6 +166,7 @@ export function QuickRepliesManager() {
           ? {
               title: draft.title,
               kind: "video",
+              content_text: draft.content_text.trim() || undefined,
               media_url: draft.media_url,
               media_name: draft.media_name,
               media_type: "video/mp4",

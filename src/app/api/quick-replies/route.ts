@@ -65,6 +65,14 @@ export async function POST(request: Request) {
         { status: 400 },
       )
     }
+    // Caption shown above the video — optional, capped to the WhatsApp
+    // caption limit and trimmed.
+    const caption =
+      typeof body.content_text === 'string' ? body.content_text.trim() : ''
+    content_text =
+      caption.length > 0
+        ? caption.slice(0, 1024)
+        : null
   } else {
     const text = typeof body.content_text === 'string' ? body.content_text : ''
     if (!text.trim()) {

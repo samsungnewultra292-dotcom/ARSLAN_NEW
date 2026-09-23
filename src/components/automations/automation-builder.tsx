@@ -73,7 +73,7 @@ import { interactivePayloadPreviewText } from "@/lib/whatsapp/interactive"
 import { createClient } from "@/lib/supabase/client"
 import {
   uploadAccountMedia,
-  MEDIA_MAX_BYTES_BY_KIND,
+  validateMediaFile,
 } from "@/lib/storage/upload-media"
 import {
   conditionBranchKeys,
@@ -1571,14 +1571,16 @@ function SendMediaSection({
   const handleFile = useCallback(
     async (file: File) => {
       const kind = pendingKind
-      const max = MEDIA_MAX_BYTES_BY_KIND[kind]
-      if (file.size > max) {
-        toast.error(
-          t("config.mediaTooLarge", {
-            size: (file.size / 1024 / 1024).toFixed(1),
-            limit: (max / 1024 / 1024).toFixed(0),
-          }),
-        )
+      const check = validateMediaFile(kind, file)
+      if (!check.ok) {
+        const reason =
+          check.size > check.limit
+            ? t("config.mediaTooLarge", {
+                size: (check.size / 1024 / 1024).toFixed(1),
+                limit: (check.limit / 1024 / 1024).toFixed(0),
+              })
+            : check.error
+        toast.error(reason ?? t("config.mediaUploadFailed"))
         return
       }
       setUploading(true)
@@ -1736,20 +1738,23 @@ function SendButtonsEditor({
       {buttons.map((b, i) => (
         <div key={b.id || i} className="space-y-2 rounded-md border border-border p-2">
           <div className="flex items-center gap-2">
+            <label className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {t("config.buttonTypeLabel")}
+            </label>
             <select
               value={b.type}
               onChange={(e) =>
                 update(i, { type: e.target.value as "quick_reply" | "url" })
               }
-              className={cn(SELECT_CLASS, "w-auto")}
+              className={cn(SELECT_CLASS, "min-w-0 flex-1")}
             >
-              <option value="quick_reply">{t("config.buttonQuickReply")}</option>
-              <option value="url">{t("config.buttonUrl")}</option>
+              <option value="quick_reply">{t("config.buttonTypeQcReply")}</option>
+              <option value="url">{t("config.buttonTypeUrl")}</option>
             </select>
             <button
               type="button"
               onClick={() => remove(i)}
-              className="ml-auto flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-rose-400"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-rose-400"
               aria-label={t("delete")}
             >
               <X className="h-3.5 w-3.5" />
