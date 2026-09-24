@@ -270,6 +270,22 @@ function InboxPageInner() {
         // the preview and triggering a hydrate — see the comment on
         // knownConvIdsRef for why a closure flag inside the updater would
         // always read false here.
+        //
+        // NOTE: unread_count is deliberately NOT touched here. The server
+        // is the single source of truth for it — the webhook bumps it
+        // atomically in `bump_conversation_on_inbound` and emits a
+        // conversations UPDATE whose payload carries the authoritative
+        // value (handleConversationEvent replaces it; the active thread is
+        // clamped to 0 and MessageThread's reset effect writes 0 to the
+        // DB). The old `c.unread_count + 1` here was the source of the
+        // phantom/inflated new-chat counts: a Realtime INSERT replay (the
+        // codebase documents that replays happen) bumped a conv twice, as
+        // did one that landed BEFORE its paired UPDATE (out-of-order
+        // delivery), and any agent/bot/flow-outbound INSERT for a conv the
+        // agent isn't viewing counted as a "new chat". Incrementing client
+        // state against a server value that will replace it moments later
+        // can only drift; the UPDATE event (and the ~5s silent list
+        // refresh) converge on the DB truth.
         if (knownConvIdsRef.current.has(newMsg.conversation_id)) {
           setConversations((prev) =>
             prev.map((c) =>
@@ -278,10 +294,6 @@ function InboxPageInner() {
                     ...c,
                     last_message_text: newMsg.content_text ?? "",
                     last_message_at: newMsg.created_at,
-                    unread_count:
-                      activeConversation?.id === newMsg.conversation_id
-                        ? 0
-                        : c.unread_count + 1,
                   }
                 : c,
             ),

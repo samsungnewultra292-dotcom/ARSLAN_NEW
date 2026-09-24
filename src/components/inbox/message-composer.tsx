@@ -152,6 +152,16 @@ export function MessageComposer({
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Synchronous re-entry guard. The `sending` state is useless for this:
+  // its value is read from a stale closure inside handleSend, and React
+  // batches setSending(true)/setSending(false) into a single render when
+  // `onSend` isn't awaited — so the guard never actually blocked a
+  // second Enter/click landing in the same window (this was one source
+  // of the duplicate-message bug). This ref flips true synchronously
+  // before `onSend` is dispatched and only clears once the returned
+  // promise settles, so every send path (Enter, Send button, media,
+  // interactive) is serialised against real network completion.
+  const sendingRef = useRef(false);
 
   // Interactive-message builder dialog + quick-reply picker.
   const [interactiveOpen, setInteractiveOpen] = useState(false);
@@ -225,25 +235,36 @@ export function MessageComposer({
     el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
   }, []);
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed || sending || sessionExpired) return;
+    if (!trimmed || sending || sendingRef.current || sessionExpired) return;
 
+    // Flip the sync guard BEFORE dispatching: a second click/Enter in
+    // the same tick (double-click, IME key repeat) sees the ref already
+    // set and bails. Cleared only when the send promise settles.
+    sendingRef.current = true;
     setSending(true);
-    try {
-      onSend(trimmed, replyTo?.id);
-      setText("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
-    } finally {
-      setSending(false);
+    setText("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
     }
+    // `onSend` returns a promise in the thread; wrap so both promise
+    // and sync-void implementations release the guard the same way.
+    Promise.resolve(onSend(trimmed, replyTo?.id)).finally(() => {
+      sendingRef.current = false;
+      setSending(false);
+    });
   }, [text, sending, sessionExpired, onSend, replyTo?.id]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
+        // isComposing: an IME soft-keyboard's confirm Enter fires during
+        // composition — sending then would transmit the pre-conversion
+        // text and let a second, post-conversion Enter send it again.
+        // repeat: a held Enter auto-repeats keydown and would otherwise
+        // re-send on each repeat.
+        if (e.nativeEvent.isComposing || e.repeat) return;
         e.preventDefault();
         handleSend();
       }
@@ -314,12 +335,20 @@ export function MessageComposer({
   );
 
   const sendInteractive = useCallback(() => {
+    if (sendingRef.current) return;
     const result = validateInteractivePayload(interactivePayload);
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
-    onSendInteractive(interactivePayload, replyTo?.id);
+    sendingRef.current = true;
+    setSending(true);
+    Promise.resolve(onSendInteractive(interactivePayload, replyTo?.id)).finally(
+      () => {
+        sendingRef.current = false;
+        setSending(false);
+      },
+    );
     setInteractiveOpen(false);
     onClearReply?.();
   }, [interactivePayload, onSendInteractive, replyTo?.id, onClearReply]);
@@ -371,10 +400,18 @@ export function MessageComposer({
         return;
       }
       if (qr.kind === "video" && qr.media_url) {
-        onSendMedia({
-          kind: "video",
-          mediaUrl: qr.media_url,
-          caption: qr.content_text?.trim() || undefined,
+        if (sendingRef.current) return;
+        sendingRef.current = true;
+        setSending(true);
+        Promise.resolve(
+          onSendMedia({
+            kind: "video",
+            mediaUrl: qr.media_url,
+            caption: qr.content_text?.trim() || undefined,
+          }),
+        ).finally(() => {
+          sendingRef.current = false;
+          setSending(false);
         });
         return;
       }
@@ -517,17 +554,28 @@ export function MessageComposer({
   // ---- Draft send / discard -----------------------------------------
 
   const sendDraft = useCallback(() => {
-    if (!draft || busy) return;
-    onSendMedia({
-      kind: draft.kind,
-      mediaUrl: draft.mediaUrl,
-      path: draft.path,
-      // Audio takes no caption (Meta rejects it). Everything else: the
-      // trimmed caption, or undefined when blank.
-      caption:
-        draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
-      filename: draft.kind === "document" ? draft.filename : undefined,
-      replyToId: replyTo?.id,
+    // `busy` guards the upload window; `sendingRef` guards the send
+    // itself — the caption input's Enter and the Send button both reach
+    // here, and neither was previously serialised against the other (or
+    // against a double-click), letting one staged attachment send twice.
+    if (!draft || busy || sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    Promise.resolve(
+      onSendMedia({
+        kind: draft.kind,
+        mediaUrl: draft.mediaUrl,
+        path: draft.path,
+        // Audio takes no caption (Meta rejects it). Everything else: the
+        // trimmed caption, or undefined when blank.
+        caption:
+          draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
+        filename: draft.kind === "document" ? draft.filename : undefined,
+        replyToId: replyTo?.id,
+      }),
+    ).finally(() => {
+      sendingRef.current = false;
+      setSending(false);
     });
     // The object is now owned by the sent message — clear without GC.
     setDraft(null);
